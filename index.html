@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>NEXUS STRIKE — Arena de Superpoderes</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>⚡</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+</head>
+<body>
+<div id="app">
+  <canvas id="game-canvas"></canvas>
+  <div id="vignette"></div>
+  <div id="flash"></div>
+
+  <!-- TOP WALLET BAR -->
+  <header id="topbar">
+    <div class="logo">NEXUS<span>STRIKE</span></div>
+    <div class="wallet">
+      <div class="coin-chip" id="coin-chip"><i>◉</i><b id="coins">1.250</b><span>coins</span></div>
+      <div class="coin-chip" id="xp-chip"><i>✦</i><b id="xpval">Lv 12</b><span>xp</span></div>
+      <button class="icon-btn" id="btn-mute" title="Som">♪</button>
+      <button class="icon-btn" id="btn-help" title="Como jogar">?</button>
+    </div>
+  </header>
+
+  <!-- MAIN MENU -->
+  <section id="screen-menu" class="screen active">
+    <div class="menu-inner panel-enter">
+      <div class="kicker">COMBATE COMPETITIVO 3D • 3 LENDAS</div>
+      <h1 class="title">NEXUS<br><em>STRIKE</em></h1>
+      <p class="subtitle">Duelos cinematográficos de superpoderes em uma arena nexus moderna. Domine fogo cósmico, campos de força e caos puro.</p>
+      <div class="menu-row">
+        <button class="btn primary" id="btn-play"><span class="btn-glow"></span><label>▶ &nbsp;JOGAR</label></button>
+        <button class="btn ghost" id="btn-how"><label>COMO JOGAR</label></button>
+      </div>
+      <div class="controls-hint">
+        <div><kbd>W A S D</kbd> mover</div><div><kbd>J / Clique</kbd> ataque</div><div><kbd>1–4</kbd> poderes</div><div><kbd>Espaço</kbd> esquiva</div><div><kbd>K</kbd> bloqueio</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CHARACTER SELECT -->
+  <section id="screen-select" class="screen">
+    <div class="select-head">
+      <h2>ESCOLHA SEU <em>LUTADOR</em></h2>
+      <p>Arraste para orbitar a prévia 3D • Passe o mouse nos cards</p>
+    </div>
+    <div class="select-grid">
+      <button class="char-card" data-char="phoenix">
+        <span class="card-border"></span>
+        <span class="card-tag">FOGO CÓSMICO</span>
+        <span class="card-name">PHOENIX</span>
+        <span class="card-role">Dano contínuo • Dreno • Renascimento</span>
+        <span class="card-diff"><i class="on"></i><i class="on"></i><i></i> Dificuldade média</span>
+      </button>
+      <button class="char-card" data-char="iw">
+        <span class="card-border"></span>
+        <span class="card-tag">CAMPOS DE FORÇA</span>
+        <span class="card-name">INVISIBLE WOMAN</span>
+        <span class="card-role">Controle • Prisão • Invisibilidade</span>
+        <span class="card-diff"><i class="on"></i><i class="on"></i><i class="on"></i> Tática avançada</span>
+      </button>
+      <button class="char-card" data-char="chaos">
+        <span class="card-border"></span>
+        <span class="card-tag">REALIDADE / CAOS</span>
+        <span class="card-name">CHAOS</span>
+        <span class="card-role">Telecinese • Lentidão • Colapso</span>
+        <span class="card-diff"><i class="on"></i><i></i><i></i> Impacto bruto</span>
+      </button>
+    </div>
+    <div id="char-detail" class="char-detail">
+      <div class="detail-left">
+        <h3 id="detail-name">PHOENIX</h3>
+        <p id="detail-desc"></p>
+        <div class="stat-row" id="detail-stats"></div>
+      </div>
+      <div class="detail-right" id="detail-abilities"></div>
+    </div>
+    <div class="select-foot">
+      <button class="btn ghost" id="btn-back-menu">← VOLTAR</button>
+      <div class="opp-pick">Oponente: <b id="opp-name">???</b> <button class="mini-btn" id="btn-reroll" title="Trocar oponente">⟳</button></div>
+      <button class="btn primary" id="btn-fight"><label>LUTAR →</label></button>
+    </div>
+  </section>
+
+  <!-- FIGHT HUD -->
+  <section id="screen-fight" class="screen">
+    <div id="hud-top">
+      <div class="hud-card left">
+        <div class="hud-name" id="hud-name-p">PHOENIX <span>VOCÊ</span></div>
+        <div class="bar hp"><div class="bar-fill" id="hp-p"></div><div class="bar-ghost" id="hp-p-ghost"></div><span class="bar-num" id="hp-p-num">1000</span></div>
+        <div class="bar en"><div class="bar-fill" id="en-p"></div><span class="bar-num" id="en-p-num">100</span></div>
+        <div class="status-row" id="status-p"></div>
+      </div>
+      <div id="timer-box"><b id="timer">99</b><span>ROUND 1</span></div>
+      <div class="hud-card right">
+        <div class="hud-name" id="hud-name-e">CHAOS <span>CPU</span></div>
+        <div class="bar hp"><div class="bar-fill" id="hp-e"></div><div class="bar-ghost" id="hp-e-ghost"></div><span class="bar-num" id="hp-e-num">1000</span></div>
+        <div class="bar en"><div class="bar-fill" id="en-e"></div><span class="bar-num" id="en-e-num">100</span></div>
+        <div class="status-row" id="status-e"></div>
+      </div>
+    </div>
+    <div id="abilities-bar"></div>
+    <div id="combo-tag" class="hidden">COMBO <b>x2</b></div>
+    <div id="center-flash" class="hidden"></div>
+    <div id="dmg-layer"></div>
+    <div id="reward-layer"></div>
+    <div id="fight-controls">
+      <span><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd> poderes</span>
+      <span><kbd>J</kbd> ataque</span><span><kbd>Espaço</kbd> esquiva</span><span><kbd>K</kbd> bloqueio</span>
+      <button class="mini-btn" id="btn-quit">✕ sair</button>
+    </div>
+    <div id="touch-ui">
+      <div id="joy-zone"><div id="joy-base"><div id="joy-knob"></div></div></div>
+      <div id="touch-btns">
+        <div class="tb-row abs">
+          <button class="tb ab" id="tb-a0">1</button>
+          <button class="tb ab" id="tb-a1">2</button>
+          <button class="tb ab" id="tb-a2">3</button>
+          <button class="tb ab" id="tb-a3">4</button>
+        </div>
+        <div class="tb-row">
+          <button class="tb small" id="tb-block">BLK</button>
+          <button class="tb small" id="tb-dodge">DGE</button>
+          <button class="tb atk" id="tb-atk">ATK</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- END SCREEN -->
+  <section id="screen-end" class="screen">
+    <div class="end-card panel-enter">
+      <div class="kicker" id="end-kicker">VITÓRIA</div>
+      <h2 id="end-title">PHOENIX VENCEU</h2>
+      <p id="end-sub"></p>
+      <div class="end-rewards" id="end-rewards"></div>
+      <div class="menu-row">
+        <button class="btn primary" id="btn-rematch"><label>↻ REVANCHE</label></button>
+        <button class="btn ghost" id="btn-change">TROCAR LUTADOR</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- HELP MODAL -->
+  <div id="help-modal" class="hidden">
+    <div class="help-card">
+      <h3>COMO JOGAR</h3>
+      <ul>
+        <li><b>WASD</b> — mover na arena 3D (câmera acompanha)</li>
+        <li><b>Mouse / J</b> — ataque básico (combo de 3 golpes)</li>
+        <li><b>1, 2, 3, 4</b> — as 4 habilidades do lutador</li>
+        <li><b>Espaço</b> — esquiva com invencibilidade breve (custa 20 energia)</li>
+        <li><b>K (segurar)</b> — bloqueio: reduz 65% do dano frontal</li>
+        <li>Gerencie <b>energia</b> e <b>cooldowns</b>. Controle de grupo tem imunidade temporária após expirar.</li>
+      </ul>
+      <button class="btn primary" id="btn-close-help"><label>ENTENDI</label></button>
+    </div>
+  </div>
+
+  <div id="toast-layer"></div>
+</div>
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>
