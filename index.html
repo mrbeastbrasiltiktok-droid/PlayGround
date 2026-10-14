@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0b0f1e">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🔥</text></svg>">
+<title>FREE FIRE 3D — Battle Royale (Phone/Tablet)</title>
+<link rel="stylesheet" href="style.css">
+<script type="importmap">
+{ "imports": { "three": "./three.module.js" } }
+</script>
+<script>
+// Early click catcher: registers Play intent even while the 3D module is still parsing.
+window.__playQueued = false;
+window.addEventListener('DOMContentLoaded', ()=>{
+  const b=document.getElementById('btn-play');
+  if(b) b.addEventListener('click', ()=>{ window.__playQueued=true; }, {capture:true});
+}, {once:true});
+</script>
+</head>
+<body>
+<div id="game-root">
+  <canvas id="game-canvas"></canvas>
+
+  <!-- Damage vignette + hit direction -->
+  <div id="damage-vignette"></div>
+  <div id="hit-dir"></div>
+  <div id="heal-flash"></div>
+
+  <!-- Top HUD -->
+  <div id="hud-top" class="hidden">
+    <div id="alive-box"><span id="alive-icon">◉</span><span id="alive-count">12</span><small>ALIVE</small></div>
+    <div id="zone-box"><span id="zone-label">ZONE 1 • 0:45</span><div id="zone-bar"><div id="zone-fill"></div></div></div>
+    <div id="kill-box"><span id="kill-count">0</span><small>KILLS</small></div>
+    <button id="btn-pause" aria-label="Pause">II</button>
+  </div>
+
+  <canvas id="minimap" width="180" height="180"></canvas>
+  <div id="killfeed"></div>
+  <div id="crosshair" class="hidden"><span></span></div>
+  <div id="hitmarker"></div>
+  <div id="scope-overlay" class="hidden"></div>
+
+  <!-- Bottom HUD -->
+  <div id="hud-bottom" class="hidden">
+    <div id="hp-armor">
+      <div id="hp-bar"><div id="hp-fill"></div><span id="hp-text">200</span></div>
+      <div id="armor-bar"><div id="armor-fill"></div></div>
+      <div id="ammo-row"><span id="weapon-name">AK-47</span><span id="ammo-text">30 / 90</span></div>
+    </div>
+    <div id="slots">
+      <button class="slot active" id="slot-0">1<br><small>RIFLE</small></button>
+      <button class="slot" id="slot-1">2<br><small>SMG</small></button>
+      <button class="slot med" id="btn-med">+<br><small id="med-count">2 MED</small></button>
+    </div>
+  </div>
+
+  <!-- Touch controls -->
+  <div id="touch-ui" class="hidden">
+    <div id="joystick"><div id="stick"></div></div>
+    <div id="look-area"></div>
+    <div id="touch-buttons">
+      <button id="btn-fire" class="tbtn big">FIRE</button>
+      <button id="btn-aim" class="tbtn">AIM</button>
+      <button id="btn-jump" class="tbtn">JUMP</button>
+      <button id="btn-crouch" class="tbtn">DUCK</button>
+      <button id="btn-reload" class="tbtn small">RLD</button>
+    </div>
+  </div>
+
+  <div id="interact-prompt" class="hidden"><span id="interact-text">Pick up</span><button id="btn-pickup">TAKE [E]</button></div>
+  <div id="center-msg" class="hidden"></div>
+  <div id="zone-warning" class="hidden">⚠ GET TO SAFE ZONE ⚠</div>
+
+  <!-- Main menu -->
+  <div id="menu" class="screen">
+    <div class="menu-bg"></div>
+    <div class="menu-card">
+      <div class="logo"><span class="logo-fire">FREE FIRE</span><span class="logo-3d">3D • BATTLE ROYALE</span></div>
+      <p class="tagline">12 drop • 1 survivor • Phone &amp; Tablet ready</p>
+      <div class="menu-row">
+        <label>Sensitivity <input id="set-sens" type="range" min="0.5" max="3" step="0.1" value="1.3"></label>
+        <label><input id="set-sound" type="checkbox" checked> Sound</label>
+        <label><input id="set-shadow" type="checkbox"> HD Shadows</label>
+        <label><input id="set-quality" type="checkbox" checked> High Detail</label>
+      </div>
+      <button id="btn-play">Play</button>
+      <p class="help">📱 Left thumb = move • Right thumb = look • FIRE to shoot<br>
+      🖥️ WASD + mouse (click to lock) • E pickup • R reload • Q medkit • Shift sprint</p>
+      <p class="credit">Fan-made demo inspired by battle-royale gameplay. No affiliation.</p>
+    </div>
+  </div>
+
+  <!-- Pause -->
+  <div id="pause" class="screen hidden">
+    <div class="menu-card"><h2>Paused</h2>
+      <button id="btn-resume">Resume</button>
+      <button id="btn-quit" class="ghost">Quit to Menu</button>
+    </div>
+  </div>
+
+  <!-- Game over -->
+  <div id="gameover" class="screen hidden">
+    <div class="menu-card"><h2 id="over-title">#2 SECOND PLACE</h2>
+      <p id="over-stats">Kills: 0 • Survived 0:00</p>
+      <div id="over-rank">BOOYAH!</div>
+      <button id="btn-again">Play Again</button>
+      <button id="btn-menu" class="ghost">Main Menu</button>
+    </div>
+  </div>
+
+  <div id="loading" class="hidden"><div class="spin"></div><p>Loading island…</p></div>
+  <div id="rotate-hint">🔄 Rotate device for best view — portrait supported</div>
+</div>
+<script type="module" src="game.js"></script>
+</body>
+</html>
