@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="mobile-web-app-capable" content="yes">
+<link rel="icon" href="data:,">
 <title>Stickman Rivals — 3D Combat Prototype</title>
 <style>
   *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none}
@@ -150,7 +151,11 @@
 </div>
 <div id="char-panel">
   <h3>Character Select</h3>
-  <div id="char-preview"><svg width="70" height="110" viewBox="0 0 70 110"><g stroke="#e8eaee" stroke-width="5" stroke-linecap="round" fill="none"><circle cx="35" cy="14" r="10" fill="#e8eaee" stroke="none"/><line x1="35" y1="26" x2="35" y2="62"/><line x1="35" y1="34" x2="16" y2="48"/><line x1="35" y1="34" x2="54" y2="48"/><line x1="35" y1="62" x2="22" y2="100"/><line x1="35" y1="62" x2="48" y2="100"/></g></svg></div>
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px">
+    <button id="char-prev" style="width:34px;height:34px;border-radius:50%;border:1px solid #4a4e57;background:#24262c;color:#fff;font-weight:900;cursor:pointer">◀</button>
+    <div id="char-preview"><svg width="70" height="110" viewBox="0 0 70 110"><g stroke="#e8eaee" stroke-width="5" stroke-linecap="round" fill="none"><circle cx="35" cy="14" r="10" fill="#e8eaee" stroke="none"/><line x1="35" y1="26" x2="35" y2="62"/><line x1="35" y1="34" x2="16" y2="48"/><line x1="35" y1="34" x2="54" y2="48"/><line x1="35" y1="62" x2="22" y2="100"/><line x1="35" y1="62" x2="48" y2="100"/></g></svg></div>
+    <button id="char-next" style="width:34px;height:34px;border-radius:50%;border:1px solid #4a4e57;background:#24262c;color:#fff;font-weight:900;cursor:pointer">▶</button>
+  </div>
   <div id="char-name">IRONMAN</div>
   <div id="char-desc">Flight-capable combat kit · missiles · repulsors · laser</div>
   <button id="char-select">SELECT IRONMAN</button>
@@ -173,7 +178,7 @@
 import * as THREE from 'three';
 
 /* ============ SETTINGS STATE ============ */
-const Settings = { targetCount:3, aimAssist:true, aimingMode:'right', sensitivity:1.2, volume:0.7, shake:true, quality:'medium', character:'none', rigType:'r15' };
+const Settings = { targetCount:3, aimAssist:true, aimingMode:'right', sensitivity:1.2, volume:0.7, shake:true, quality:'medium', character:'ironman', rigType:'r15' };
 try{ const sr=localStorage.getItem('stickman-rig'); if(sr==='r6'||sr==='r15') Settings.rigType=sr; }catch(e){}
 const DEFAULT_SENS = 1.2;
 // Central graphics-quality controller: every visual system reads from Q().
@@ -399,7 +404,6 @@ const wallMeshes=[];
 const PLAY_HALF = ARENA/2-2;   // invisible safety boundary for movement
 const FLY_MAX_H = 16;           // altitude limit
 const wallBoxes = wallMeshes.map(w=>new THREE.Box3().setFromObject(w)); // static occluders
-const _lray = new THREE.Ray();
 function clampToArena(v, margin=0){
   const h=PLAY_HALF-margin;
   v.x=THREE.MathUtils.clamp(v.x,-h,h);
@@ -437,6 +441,19 @@ function obstacleBoxes(out=[]){ // live occluder boxes for laser/camera tests
   return out;
 }
 const _occBoxes=[];
+
+// Shared vectors and pools (declared early for hoisting safety across all functions)
+const _mvF=new THREE.Vector3(), _mvR=new THREE.Vector3(), _move=new THREE.Vector3();
+const _footL=new THREE.Vector3(), _footR=new THREE.Vector3();
+const _bv=new THREE.Vector3(), _bv2=new THREE.Vector3();
+const _lray = new THREE.Ray();
+const fxPool=[];
+const FXCAP={low:60,medium:120,high:220};
+let fxAlive=0;
+const explosions=[];
+let footFixY=0;
+function idleBob0(b){ return b*0.022; }
+
 function breakObstacle(o){
   o.alive=false; o.respawnT=10; o.mesh.visible=false;
   const ci=camOccluders.indexOf(o.mesh); if(ci>=0) camOccluders.splice(ci,1);
@@ -473,20 +490,40 @@ function pointInObstacles(p){
   for(const o of obstacles){ if(o.alive && p.x>o.box.min.x&&p.x<o.box.max.x&&p.y>o.box.min.y&&p.y<o.box.max.y&&p.z>o.box.min.z&&p.z<o.box.max.z) return o; }
   return null;
 }
-// circle-vs-box push-out for the player (ground + low flight; flies over tall tops)
-function collideObstacles(pos,flyH){
+// circle-vs-box push-out for the player (ground + low flight; flies over tall tops).
+// STEP-UP: structures at or below STEP_UP are walkable footing — walking into
+// one places the player on top instead of blocking, so the arena's platforms
+// and crates are genuinely testable. Tall cover keeps blocking. Returns the
+// height to stand on (0 = none); callers decide when to apply it.
+const STEP_UP=1.25;
+function collideObstacles(pos,flyH,stepUp){
   const bodyY=flyH+1.0;
+  let step=0;
   for(const o of obstacles){
     if(!o.alive) continue;
     if(bodyY>o.top+0.4) continue; // cleared it vertically
     const dx=pos.x-o.cx, dz=pos.z-o.cz;
     const px=o.hw-Math.abs(dx), pz=o.hd-Math.abs(dz);
     if(px>0&&pz>0){
+      if(stepUp && o.top<=STEP_UP && flyH<o.top){ if(o.top>step) step=o.top; continue; }
       if(px<pz) pos.x=o.cx+Math.sign(dx||1)*(o.hw);
       else pos.z=o.cz+Math.sign(dz||1)*(o.hd);
     }
   }
-  return pos;
+  return step;
+}
+// Standable ground sampling: low test structures (platform, cover blocks,
+// crates) act as real footing. Tall pillar (top>2.6) is never standable.
+// flyH is height above y=0, so standing on a top means flyH===top.
+function groundHeightAt(x,z){
+  let h=0;
+  for(const o of obstacles){
+    if(!o.alive||o.top>2.6) continue;
+    if(x>o.box.min.x+0.15&&x<o.box.max.x-0.15&&z>o.box.min.z+0.15&&z<o.box.max.z-0.15){
+      if(o.top>h) h=o.top;
+    }
+  }
+  return h;
 }
 
 /* ============ ROBLOX-STYLE RIGS (R6 + R15, shared skeleton API) ============
@@ -676,11 +713,16 @@ function updateBurnAura(t,dt,time){
   const on=t.alive && t.burn && t.burn.t>0;
   a.grp.visible=on; if(!on) return;
   a.tick-=dt;
-  if(a.tick<=0){ // ember sparks shedding from the burning body
+  if(a.tick<=0){ // ember sparks + subtle smoke shedding from the burning body
     a.tick=0.09;
     const pm=fxSpawn(fireEmberGeo,0xffd24a,true,0.9);
     if(pm){ pm.position.copy(t.rig.group.position); pm.position.y+=0.9+Math.random()*1.1; pm.position.x+=(Math.random()-0.5)*0.5; pm.position.z+=(Math.random()-0.5)*0.5;
       explosions.push({flash:pm,parts:[],ringM:null,life:0,dur:0.55}); }
+    if(Math.random()<0.25){
+      const sm=fxSpawn(smokeGeo,0x555555,false,0.35);
+      if(sm){ sm.position.copy(t.rig.group.position); sm.position.y+=1.6+Math.random()*0.5; sm.scale.setScalar(0.6);
+        explosions.push({flash:sm,parts:[],ringM:null,life:0,dur:0.6}); }
+    }
   }
   for(const p of a.parts){
     const s=0.7+0.45*Math.sin(time*9+p.ph);
@@ -719,7 +761,7 @@ function tryJump(){
   if(player.flying){ // flight already owns vertical movement; drop altitude instead
     return;
   }
-  if(player.atkT>0||AB.spin.t>0) return; // no jump mid-attack/spin: keeps commitments clean
+  if(player.atkT>0||AB.spin.t>0||(AB.flame&&AB.flame.t>0)) return; // no jump mid-attack/spin/flame: keeps commitments clean
   if(player.coyoteT>0){
     player.vy=JUMP_VEL; player.grounded=false; player.coyoteT=0; player.jumpT=0.28; player.airT=0;
     SFX.jump(); triggerShake(0.05,0.1); camKick(0.05);
@@ -734,17 +776,22 @@ function updatePlayerPhysics(dt){
     player.coyoteT=COYOTE;
     player.jumpT=Math.max(0,player.jumpT-dt);
     player.landT=Math.max(0,player.landT-dt*1.6);
+    // stick to standable tops (platform / cover); walking off an edge starts a fall below
+    player.flyH=groundHeightAt(player.pos.x,player.pos.z);
     return;
   }
-  // airborne: integrate gravity with a short apex hang for weight
+  // airborne: integrate gravity with a short apex hang for weight.
+  // Flight-touchdown glide owns vertical while active (no double integration).
+  if(player.landing) return;
   player.airT+=dt;
   player.jumpT=Math.max(0,player.jumpT-dt);
   const hang=Math.abs(player.vy)<2.2?0.72:1; // reduced gravity near apex
   player.vy-=GRAVITY*hang*dt;
   player.flyH+=player.vy*dt;
   player.lastFallSpeed=Math.max(player.lastFallSpeed,-player.vy);
-  if(player.flyH<=0){
-    player.flyH=0; player.vy=0; player.grounded=true;
+  const gnd=groundHeightAt(player.pos.x,player.pos.z);
+  if(player.flyH<=gnd){
+    player.flyH=gnd; player.vy=0; player.grounded=true;
     const hard=player.lastFallSpeed>9;
     player.landT=hard?1:0.55;
     player.lastFallSpeed=0;
@@ -769,11 +816,16 @@ function landingDust(){
     entry.parts.push({m:pm,v,life:0,dur:0.45});
   }
 }
-function resetKitCooldowns(){ atkTimer=0; try{ atkBuffer=0; }catch(e){} AB.spin.cd=0; AB.volley.cd=0; AB.laser.cd=0; AB.fly.cd=0; }
+function resetKitCooldowns(){ atkTimer=0; try{ atkBuffer=0; }catch(e){} AB.spin.cd=0; AB.volley.cd=0; AB.laser.cd=0; AB.fly.cd=0; AB.flame.cd=0; AB.nova.cd=0; AB.pyro.cd=0; }
 function cancelAbilityFX(){
-  endSpin(false); endLaser(false); endFlight(false);
+  try{ endSpin(false); }catch(e){}
+  try{ endLaser(false); }catch(e){}
+  try{ endFlight(false); }catch(e){}
+  try{ endFlame(false); }catch(e){}
+  // nova + pyro are instant-fire (no sustained state), nothing to cancel
   player.atkT=0; player.pendingShot=false;
   try{ atkBuffer=0; }catch(e){}
+  try{ document.querySelectorAll('.ability').forEach(b=>b.classList.remove('ability-active')); }catch(e){}
 }
 /* Safe rig swap: cancel FX, swap the single player rig, restore state.
    Camera + joystick read player.pos live, so they never disconnect. */
@@ -795,7 +847,24 @@ function setRigType(t){
   playerRig.group.position.copy(player.pos);
   playerRig.group.rotation.set(0,player.yaw,0);
   scene.add(playerRig.group);
+  applyCharacterTint();
   toast(t==='r6'?'RIG: R6 CLASSIC':'RIG: R15 ARTICULATED');
+}
+function applyCharacterTint(){
+  // Preserve the Stickman rig geometry; only retint its shared clay material so
+  // IRONMAN stays dark clay and HUMAN TORCH reads warm/ablaze. Works for R6+R15.
+  try{
+    const isTorch=Settings.character==='torch';
+    const col=isTorch?0x6b3410:0x2b2b31;
+    for(const m of (playerRig.mats||[])){
+      if(!m||!m.color) continue;
+      m.color.setHex(col);
+      if(m.emissive!==undefined){
+        if(isTorch){ m.emissive.setHex(0xff5a00); m.emissiveIntensity=0.28; }
+        else { m.emissive.setRGB(0,0,0); m.emissiveIntensity=0; }
+      }
+    }
+  }catch(e){}
 }
 function respawnPlayer(){
   cancelAbilityFX(); resetKitCooldowns();
@@ -803,11 +872,14 @@ function respawnPlayer(){
   try{ manualLock=null; if(typeof clearLock==='function') clearLock(); }catch(e){}
   player.pos.set(0,0,10); player.yaw=Math.PI; player.combo=0; player.comboIdle=0;
   player.walkPhase=0; player.flyH=0; player.flyV=0; player.flying=false; player.landing=false;
-  player.speed=BASE_SPEED; player.spinAngle=0; player.volleyPose=0; player.recoil=0; player.turnVel=0;
+  player.speed=(typeof activeKit==='function'?activeKit().baseSpeed:BASE_SPEED); player.spinAngle=0; player.volleyPose=0; player.recoil=0; player.turnVel=0;
   player.vel.set(0,0,0); player.fvel.set(0,0,0); player.stepIdx=0;
+  // clear torch sustain state so respawn never inherits a stuck flame pose
+  try{ AB.flame.t=0; AB.flame.tick=0; }catch(e){}
   document.getElementById('fly-alt').classList.remove('show');
   playerRig.group.position.copy(player.pos); playerRig.group.rotation.set(0,player.yaw,0);
   playerRig.hips.position.x=0;
+  applyCharacterTint();
 }
 
 /* ============ TARGETS ============ */
@@ -842,26 +914,61 @@ function randomizeTargetPos(t){
 function resetTargetVisual(t){
   t.rig.group.rotation.set(0,Math.random()*Math.PI*2,0);
   t.rig.group.position.y=0;
+  // clear tracked velocity so a teleport never feeds a bogus homing lead
+  if(t.vel) t.vel.set(0,0,0);
+  t._lp=null;
   t.rig.hips.position.y=HIP_H;
   for(const k of ['armL','armR']) { t.rig[k].sh.rotation.set(0,0,0); t.rig[k].el.rotation.set(0,0,0); }
   t.rig.group.traverse(o=>{ if(o.isMesh&&o.material.emissive!==undefined){ o.material.emissive.setRGB(0,0,0); o.material.emissiveIntensity=0; } });
 }
 let targetUid=0;
+/* ---- BEAM-CLASH SPECIALIST: exactly ONE training target can answer with a
+   counter-beam; every other dummy is a normal target (canClash=false) and will
+   never trigger the clash system. The specialist is visually distinct
+   (violet clay + floating clash marker) so the player can tell them apart. */
+function markClashTarget(t){
+  t.canClash=true;
+  try{
+    t.rig.group.traverse(o=>{ if(o.isMesh&&o.material&&o.material.color){ if(t.hb&&(o===t.hb.bg||o===t.hb.fg)) return; if(o===t.clashMarker) return; o.material.color.setHex(0x9a5f8e); } });
+    if(!t.clashMarker){
+      const mk=new THREE.Mesh(new THREE.OctahedronGeometry(0.22),
+        new THREE.MeshBasicMaterial({color:0xff4dd2,transparent:true,opacity:0.95,blending:THREE.AdditiveBlending,depthWrite:false}));
+      mk.position.set(0,3.05,0); t.rig.group.add(mk); t.clashMarker=mk;
+    } else t.clashMarker.visible=true;
+  }catch(e){}
+}
+function markNormalTarget(t){
+  t.canClash=false;
+  try{
+    t.rig.group.traverse(o=>{ if(o.isMesh&&o.material&&o.material.color){ if(t.hb&&(o===t.hb.bg||o===t.hb.fg)) return; if(o===t.clashMarker) return; o.material.color.setHex(0xa89c8c); } });
+    if(t.clashMarker) t.clashMarker.visible=false;
+  }catch(e){}
+}
+function ensureSingleClashTarget(){
+  if(!targets.length) return;
+  let specials=targets.filter(t=>t.canClash===true);
+  if(specials.length===1){ markClashTarget(specials[0]); targets.forEach(t=>{ if(t!==specials[0]) markNormalTarget(t); }); return; }
+  targets.forEach(markNormalTarget);
+  markClashTarget(targets[0]); // stable slot: index 0 survives count changes (removals pop from the end)
+}
 function spawnTarget(i){
   const rig=buildRig('r15',0xa89c8c); // polished light clay dummy, distinct from player
   rig.group.traverse(o=>{ if(o.isMesh){o.material=o.material.clone();}});
   scene.add(rig.group);
   const hb=makeHealthBar(); hb.grp.position.set(0,2.55,0); rig.group.add(hb.grp);
   const blob=addBlobShadow(1.25);
-  const t={ uid:++targetUid, rig, health:100, maxHealth:100, alive:true, flash:0, recoil:0, baseY:0, hb, blob, respawnT:0, ragdollT:0, hitOffset:0 };
+  const t={ uid:++targetUid, rig, health:100, maxHealth:100, alive:true, flash:0, recoil:0, baseY:0, hb, blob, respawnT:0, ragdollT:0, hitOffset:0, canClash:false, clashMarker:null };
   randomizeTargetPos(t);
   rig.group.rotation.y=Math.random()*Math.PI*2;
-  targets.push(t); updateKillCounter();
+  targets.push(t); ensureSingleClashTarget(); updateKillCounter();
 }
 function respawnTarget(t){
+  clearBurn(t);
   randomizeTargetPos(t);
   t.health=t.maxHealth; t.alive=true; t.flash=0; t.recoil=0; t.respawnT=0; t.ragdollT=0;
-  resetTargetVisual(t); updateHealthBar(t); updateKillCounter();
+  resetTargetVisual(t); updateHealthBar(t);
+  try{ if(t.canClash) markClashTarget(t); else markNormalTarget(t); }catch(e){}
+  updateKillCounter();
 }
 function updateRespawns(dt){
   for(const t of targets){
@@ -871,10 +978,11 @@ function updateRespawns(dt){
     }
   }
 }
-function clearTargets(){ for(const t of targets){ scene.remove(t.rig.group); scene.remove(t.blob);} targets.length=0; }
+function clearTargets(){ try{ if(typeof beamClash!=='undefined'&&beamClash&&typeof endBeamClash==='function') endBeamClash('targets-cleared', false); }catch(e){ try{ beamClash=null; }catch(_){} } for(const t of targets){ try{ clearBurn(t); }catch(e){} scene.remove(t.rig.group); scene.remove(t.blob);} targets.length=0; }
 function syncTargetCount(n){ // spawn or remove slots; dead slots keep counting until respawn or removal
-  while(targets.length>n){ const t=targets.pop(); if(lockedTarget===t) clearLock(); scene.remove(t.rig.group); scene.remove(t.blob); const bi=blobShadows.indexOf(t.blob); if(bi>=0) blobShadows.splice(bi,1); }
+  while(targets.length>n){ const t=targets.pop(); if(lockedTarget===t) clearLock(); try{ if(typeof beamClash!=='undefined'&&beamClash&&beamClash.target===t&&typeof endBeamClash==='function') endBeamClash('target-removed', true); }catch(e){} try{ clearBurn(t); }catch(e){} scene.remove(t.rig.group); scene.remove(t.blob); const bi=blobShadows.indexOf(t.blob); if(bi>=0) blobShadows.splice(bi,1); }
   while(targets.length<n){ spawnTarget(targets.length); }
+  ensureSingleClashTarget();
   document.getElementById('v-targets').textContent=n;
   updateKillCounter();
 }
@@ -885,10 +993,11 @@ targets.forEach(updateHealthBar);
 
 /* Damage numbers (HTML floating, billboard equivalent) */
 const dmgPool=[];
-function spawnDamageNumber(worldPos, amount, crit=false){
+function spawnDamageNumber(worldPos, amount, crit=false, kind=null){
   const el=document.createElement('div'); el.className='dmg-num'+(crit?' crit':''); el.textContent=Math.round(amount);
+  if(kind==='burn'){ el.style.color='#ff9a2a'; el.style.fontSize='17px'; el.style.textShadow='0 0 6px #ff5a00,0 2px 2px #000,-1px -1px 0 #000,1px -1px 0 #000,-1px 1px 0 #000,1px 1px 0 #000'; }
   dmgLayer.appendChild(el);
-  dmgPool.push({el, world:worldPos.clone(), life:0, dur:0.9, vy:70});
+  dmgPool.push({el, world:worldPos.clone(), life:0, dur:kind==='burn'?0.8:0.9, vy:70});
 }
 function updateDamageNumbers(dt){
   for(let i=dmgPool.length-1;i>=0;i--){ const d=dmgPool[i]; d.life+=dt;
@@ -946,9 +1055,6 @@ const fireEmberGeo=new THREE.SphereGeometry(0.09,6,5);
 /* Transient FX mesh pool: recycles short-lived additive/transparent spheres
    (smoke, sparks, thrust, palm parts) instead of allocating materials + meshes
    every frame. Quality caps total live pooled meshes; acquire fails past cap. */
-const fxPool=[];
-const FXCAP={low:60,medium:120,high:220};
-let fxAlive=0;
 function fxSpawn(geo,color,additive,op){
   for(const m of fxPool){
     if(!m.visible && m.userData.geo===geo && m.userData.color===color && m.userData.add===additive){
@@ -966,7 +1072,35 @@ function fxSpawn(geo,color,additive,op){
   return m;
 }
 function fxKill(m){ if(!m||!m.visible) return; m.visible=false; fxAlive=Math.max(0,fxAlive-1); }
-function fxFree(m){ if(m&&m.userData&&m.userData.pooled) fxKill(m); else if(m) scene.remove(m); }
+/* Owned-transient disposal: explosion flashes/rings built with per-blast `new`
+   geometry/material are disposed on cleanup so long sessions never leak GPU
+   resources. Pooled meshes and registered shared geometries/materials are never
+   disposed — only hidden or removed. */
+const SHARED_GEO = new Set();
+const SHARED_MAT = new Set();
+function markSharedGeo(...geos){ for(const g of geos) if(g) SHARED_GEO.add(g); }
+function markSharedMat(...mats){ for(const m of mats) if(m) SHARED_MAT.add(m); }
+function fxFree(m){
+  if(!m) return;
+  if(m.userData&&m.userData.pooled){ fxKill(m); return; }
+  scene.remove(m);
+  try{ if(m.material&&!SHARED_MAT.has(m.material)&&m.material.dispose) m.material.dispose(); }catch(e){}
+  try{ if(m.geometry&&!SHARED_GEO.has(m.geometry)&&m.geometry.dispose) m.geometry.dispose(); }catch(e){}
+}
+/* Projectile cleanup: shot groups reuse shared body geometries/materials but
+   own their flame/glow materials + lights per shot — release the owned
+   materials so volleys and combos never accumulate GPU state. */
+function freeShotGroup(g){
+  if(!g) return;
+  try{
+    g.traverse(o=>{
+      if(o&&o.isMesh&&o.material&&!SHARED_MAT.has(o.material)&&o.material.dispose){
+        try{ o.material.dispose(); }catch(e){}
+      }
+    });
+  }catch(e){}
+  scene.remove(g);
+}
 function buildMissileMesh(withLight=true){
   const g=new THREE.Group();
   const body=new THREE.Mesh(mslBodyGeo,mslBodyMat); body.castShadow=false; g.add(body);
@@ -987,7 +1121,7 @@ function fireMissile(dir, homingTarget, startPos, opts={}){
   SFX.missile();
   triggerShake(0.10,0.10);
 }
-function explodeMissile(pos, dmg, radius, big, sizeMult=1, kick=1){
+function explodeMissile(pos, dmg, radius, big, sizeMult=1, kick=1, volleySet=null){
   const q=Q(), s=q.boomScale*(big?1.35:1.0)*sizeMult;
   const flash=new THREE.Mesh(new THREE.SphereGeometry(0.5*s,14,12), new THREE.MeshBasicMaterial({color:0xffd76e,transparent:true,opacity:0.95}));
   flash.position.copy(pos); scene.add(flash);
@@ -1005,13 +1139,19 @@ function explodeMissile(pos, dmg, radius, big, sizeMult=1, kick=1){
   if(Settings.quality!=='low'){ ringM=new THREE.Mesh(new THREE.RingGeometry(0.3*s,0.65*s,28), new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:0.9,side:THREE.DoubleSide})); ringM.position.copy(pos); ringM.lookAt(camera.position); scene.add(ringM); }
   explosions.push({flash,parts,ringM,life:0,dur:0.55});
   if(q.boomLight){ /* flash light via shared temp light */ pulseLight(pos, big?8:5); }
-  // Real gameplay AoE: damage every valid target in radius (never the player)
+  // Real gameplay AoE: damage every valid target in radius (never the player).
+  // Volley fairness: targets already struck by this volley take 40% from
+  // later blasts, so a 6-missile spread pressures groups without deleting one
+  // dummy six times over. Fresh targets always take full damage.
   if(dmg>0){
     for(const t of targets){
       if(!t.alive) continue;
       const c=t.rig.group.position.clone(); c.y=1.2;
       if(c.distanceTo(pos)<=radius+0.6){
-        applyDamage(t, dmg, pos.clone(), kick);
+        let d=dmg;
+        if(volleySet && volleySet[t.uid]) d=Math.max(1,Math.round(dmg*0.4));
+        applyDamage(t, d, pos.clone(), kick);
+        if(volleySet) volleySet[t.uid]=1;
         if(big) t.ragdollT=0.7; // brief ragdoll, auto-recovers in animateTargets
       }
     }
@@ -1023,28 +1163,172 @@ function explodeMissile(pos, dmg, radius, big, sizeMult=1, kick=1){
   SFX.explosion(distVol(pos)); SFX.impact();
   triggerShake(big?0.3:0.2,0.22);
   camKick(big?0.16:0.07);
-  hitVignette();
+  hitVignetteAt(pos, big?0.85:0.5);
 }
 // Shared reusable flash light (avoids per-explosion light allocation)
 const boomLight=new THREE.PointLight(0xffa040,0,18); scene.add(boomLight);
 let boomLightT=0;
 function pulseLight(pos,i){ boomLight.position.copy(pos); boomLight.position.y+=0.5; boomLight.intensity=i; boomLightT=0.25; }
-function destroyProj(i){ const p=projectiles[i]; scene.remove(p.mesh); p.trailMeshes.forEach(t=>fxKill(t.m)); projectiles.splice(i,1); }
-function missileHitsTarget(pos){
+function destroyProj(i){ const p=projectiles[i]; freeShotGroup(p.mesh); p.trailMeshes.forEach(t=>fxKill(t.m)); projectiles.splice(i,1); }
+/* ---- SWEPT projectile hit test: segment p0→p1 vs target torso sphere.
+   The old per-point test can TUNNEL on mobile: a missile at 34 m/s travels
+   1.13 m per frame at 30fps, wider than the 1.05 m torso radius, so fast
+   projectiles could pass through a dummy on a slow device (and the player
+   would see the explosion past the target). Testing the whole swept segment
+   makes hit registration accurate and framerate-independent, while returning
+   a single target keeps the "no duplicate hit registration" rule. */
+const TGT_R = 1.05, TGT_CY = 1.2;
+const _segDir = new THREE.Vector3();
+function missileHitsTarget(p0, p1){
+  const q1 = (p1===p0 || !p1) ? p0 : p1;
+  _segDir.copy(q1).sub(p0);
+  const L = _segDir.length();
+  const px=p0.x, py=p0.y, pz=p0.z;
+  if(L < 1e-6){ // zero-length step (paused frame): point test
+    for(const t of targets){ if(!t.alive) continue;
+      const tp=t.rig.group.position; const dx=px-tp.x, dz=pz-tp.z;
+      if(dx*dx+dz*dz<TGT_R*TGT_R && Math.abs(py-(tp.y+TGT_CY))<1.7) return t;
+    }
+    return null;
+  }
+  const ux=_segDir.x/L, uy=_segDir.y/L, uz=_segDir.z/L;
   for(const t of targets){ if(!t.alive) continue;
-    const tp=t.rig.group.position; const dx=pos.x-tp.x, dz=pos.z-tp.z, dy=pos.y-1.2;
-    if(dx*dx+dz*dz<1.2 && Math.abs(dy)<1.7){ return t; }
+    const tp=t.rig.group.position;
+    const ox=tp.x-px, oy=tp.y+TGT_CY-py, oz=tp.z-pz;   // p0 -> torso centre
+    const tca=ox*ux+oy*uy+oz*uz;                        // nearest param on segment
+    if(tca < -0.8 || tca > L+0.8) continue;
+    let k=tca; if(k<0) k=0; else if(k>L) k=L;
+    const dx=ux*k-ox, dy=uy*k-oy, dz=uz*k-oz;
+    if(dx*dx+dy*dy+dz*dz <= TGT_R*TGT_R) return t;
   }
   return null;
 }
+/* ---- Predictive homing steer ---- Marvel Rivals projectiles converge instead
+   of tailing: aim at where the target WILL be (position + velocity × time of
+   arrival) rather than where it is now. Without this, a homing missile always
+   approaches from behind a moving target and its turn arc never closes. The
+   lead is clamped so homing stays readable. Target velocity is tracked in
+   animateTargets (t.vel). */
+const _leadP = new THREE.Vector3();
+function homingSteerDT(p, dt, agility){
+  if(!p.target || !p.target.alive || !Settings.aimAssist) return;
+  const pos = p.mesh ? p.mesh.position : p.group.position;
+  const tp = p.target.rig.group.position.clone(); tp.y = 1.35;
+  const spd = Math.max(1, p.vel.length());
+  const eta = Math.min(0.35, pos.distanceTo(tp)/spd);   // capped intercept lead
+  if(p.target.vel) tp.addScaledVector(p.target.vel, eta);
+  const desired = tp.sub(pos).normalize().multiplyScalar(spd);
+  p.vel.lerp(desired, Math.min(1, dt*agility));
+}
+/* ---- HUMAN TORCH BASIC ATTACK: FIREBALL ----
+   Fast, accurate hand-launched flame bolts. Layered look: white-yellow core +
+   orange glow + additive ember trail + impact sparks. Real combat: direct damage
+   plus burn, quality-scaled particles, pooled meshes, capped trails. */
+const fireCoreGeo=new THREE.SphereGeometry(0.15,12,10);
+const fireGlowGeo=new THREE.SphereGeometry(0.26,12,10);
+function buildFireballMesh(big=false){
+  const g=new THREE.Group();
+  const core=new THREE.Mesh(fireCoreGeo,new THREE.MeshBasicMaterial({color:0xfff6c8,transparent:true,opacity:0.98,blending:THREE.AdditiveBlending,depthWrite:false}));
+  const glow=new THREE.Mesh(fireGlowGeo,new THREE.MeshBasicMaterial({color:0xff7a1e,transparent:true,opacity:0.75,blending:THREE.AdditiveBlending,depthWrite:false}));
+  const s=big?1.45:1.0; core.scale.setScalar(s); glow.scale.setScalar(s);
+  g.add(glow,core);
+  let light=null;
+  if(Q().flashLight){ light=new THREE.PointLight(0xff8a2a,5,9); g.add(light); }
+  return {group:g, core, glow, light};
+}
+function fireFireball(dir, homingTarget, startPos, opts={}){
+  const {dmg=18, radius=2.0, big=false, speed=44, burnDmg=3.4, burnDur=3.2}=opts;
+  const {group, core, glow}=buildFireballMesh(big);
+  group.position.copy(startPos);
+  scene.add(group);
+  fireballs.push({mesh:group, core, glow, vel:dir.clone().multiplyScalar(speed), life:0, maxRange:95,
+    traveled:0, target:homingTarget||null, dmg, radius, big, burnDmg, burnDur, smokeT:0, trailMeshes:[]});
+  SFX.fireball();
+  triggerShake(big?0.14:0.08,0.10);
+}
+function fireballExplode(pos, dmg, radius, big, burnDmg=3.4, burnDur=3.2){
+  const q=Q(), s=q.boomScale*(big?1.3:1.0);
+  const flash=new THREE.Mesh(new THREE.SphereGeometry(0.45*s,14,12), new THREE.MeshBasicMaterial({color:0xffd76e,transparent:true,opacity:0.95,blending:THREE.AdditiveBlending,depthWrite:false}));
+  flash.position.copy(pos); scene.add(flash);
+  const n=Math.round(q.particles*(big?1.5:1.0));
+  const parts=[];
+  for(let i=0;i<n;i++){
+    const r=Math.random();
+    const col=r<0.4?0xff7a1a:(r<0.7?0xffd76e:(r<0.85?0xfff6c8:0x777777));
+    const add=r<0.85;
+    const pm=fxSpawn(r<0.85?fireEmberGeo:smokeGeo,col,add,1);
+    if(!pm) break;
+    pm.position.copy(pos); pm.scale.setScalar(s*(0.7+Math.random()*0.7));
+    const v=new THREE.Vector3((Math.random()-0.5),Math.random()*0.9+0.2,(Math.random()-0.5)).normalize().multiplyScalar((4+Math.random()*8)*s);
+    parts.push({m:pm,v,life:0,dur:(0.35+Math.random()*0.3)*(q===QUALITY.low?0.7:1)});
+  }
+  let ringM=null;
+  if(Settings.quality!=='low'){ ringM=new THREE.Mesh(new THREE.RingGeometry(0.3*s,0.62*s,28), new THREE.MeshBasicMaterial({color:0xffc46e,transparent:true,opacity:0.9,side:THREE.DoubleSide,blending:THREE.AdditiveBlending,depthWrite:false})); ringM.position.copy(pos); ringM.lookAt(camera.position); scene.add(ringM); }
+  explosions.push({flash,parts,ringM,life:0,dur:0.5});
+  if(q.boomLight) pulseLight(pos, big?7:4);
+  if(dmg>0){
+    for(const t of targets){
+      if(!t.alive) continue;
+      const c=t.rig.group.position.clone(); c.y=1.2;
+      if(c.distanceTo(pos)<=radius+0.6){
+        applyDamage(t, dmg, pos.clone(), big?1.2:0.9);
+        applyBurn(t,{dmg:burnDmg,dur:burnDur});
+        if(big) t.ragdollT=Math.max(t.ragdollT,0.4);
+      }
+    }
+    damageObstacles(pos,radius,dmg);
+    hitStop(big?0.06:0.025);
+    screenPulse('255,140,40',big?0.24:0.14,big?0.3:0.2);
+  }
+  SFX.explosion(distVol(pos,0.8)); SFX.impact();
+  triggerShake(big?0.28:0.16,0.2);
+  camKick(big?0.14:0.06);
+  hitVignetteAt(pos, big?0.85:0.5);
+}
+function destroyFireball(i){ const p=fireballs[i]; freeShotGroup(p.mesh); p.trailMeshes.forEach(t=>fxKill(t.m)); fireballs.splice(i,1); }
+function updateFireballs(dt){
+  const q=Q();
+  const _prev=new THREE.Vector3();
+  for(let i=fireballs.length-1;i>=0;i--){ const p=fireballs[i];
+    if(p.target && p.target.alive && Settings.aimAssist) homingSteerDT(p,dt,8);
+    _prev.copy(p.mesh.position);
+    const step=p.vel.clone().multiplyScalar(dt);
+    p.mesh.position.add(step); p.traveled+=step.length(); p.life+=dt;
+    const fl=0.9+Math.random()*0.5;
+    p.core.scale.setScalar((p.big?1.45:1.0)*fl);
+    p.glow.scale.setScalar((p.big?1.45:1.0)*(1.1-Math.random()*0.25));
+    // bright flame trail: embers + occasional smoke, quality-scaled
+    p.smokeT-=dt;
+    if(p.smokeT<=0 && Math.random()<q.trailRate+0.15){
+      p.smokeT=0.04;
+      const ember=fxSpawn(fireEmberGeo,Math.random()<0.5?0xff8a2a:0xffd24a,true,0.85);
+      if(ember){ ember.position.copy(p.mesh.position); ember.scale.setScalar(0.8+Math.random()*0.7); p.trailMeshes.push({m:ember,life:0,ember:true}); }
+      if(Math.random()<0.3){
+        const sm=fxSpawn(smokeGeo,0x555555,false,0.4);
+        if(sm){ sm.position.copy(p.mesh.position); sm.scale.setScalar(0.7); p.trailMeshes.push({m:sm,life:0,ember:false}); }
+      }
+      if(p.trailMeshes.length>q.trail){ const old=p.trailMeshes.shift(); fxKill(old.m); }
+    }
+    for(let j=p.trailMeshes.length-1;j>=0;j--){ const tr=p.trailMeshes[j]; tr.life+=dt;
+      tr.m.material.opacity=Math.max(0,(tr.ember?0.85:0.4)-tr.life*(tr.ember?2.2:1.4));
+      tr.m.scale.multiplyScalar(1+dt*(tr.ember?0.8:1.6));
+      if(tr.life>(tr.ember?0.4:0.5)){ fxKill(tr.m); p.trailMeshes.splice(j,1); } }
+    const mp=p.mesh.position;
+    const hit=missileHitsTarget(_prev,mp);
+    const hitWall=Math.abs(mp.x)>PLAY_HALF+0.4||Math.abs(mp.z)>PLAY_HALF+0.4;
+    const hitCover=!hit && pointInObstacles(mp);
+    if(hit){ fireballExplode(mp.clone(),p.dmg,p.radius,p.big,p.burnDmg,p.burnDur); destroyFireball(i); }
+    else if(hitCover){ fireballExplode(mp.clone(),p.dmg,p.radius,p.big,p.burnDmg,p.burnDur); destroyFireball(i); }
+    else if(!hit && (mp.y<0.12||hitWall||mp.y>40)){ fireballExplode(mp.clone(),0,p.radius,false,0,0); destroyFireball(i); }
+    else if(p.traveled>p.maxRange||p.life>4){ fireballExplode(mp.clone(),0,p.radius,false,0,0); destroyFireball(i); }
+  }
+}
 function updateProjectiles(dt){
   const q=Q();
+  const _prev=new THREE.Vector3();
   for(let i=projectiles.length-1;i>=0;i--){ const p=projectiles[i];
-    if(p.target && p.target.alive && Settings.aimAssist){
-      const tp=p.target.rig.group.position.clone(); tp.y=1.35;
-      const desired=tp.sub(p.mesh.position).normalize().multiplyScalar(p.vel.length());
-      p.vel.lerp(desired, Math.min(1,dt*(p.agile?10:7)));
-    }
+    if(p.target && p.target.alive && Settings.aimAssist) homingSteerDT(p,dt,p.agile?10:7);
+    _prev.copy(p.mesh.position);
     const step=p.vel.clone().multiplyScalar(dt);
     p.mesh.position.add(step); p.traveled+=step.length(); p.life+=dt;
     orientAlong(p.mesh, p.vel);
@@ -1059,7 +1343,7 @@ function updateProjectiles(dt){
     }
     for(let j=p.trailMeshes.length-1;j>=0;j--){ const tr=p.trailMeshes[j]; tr.life+=dt; tr.m.material.opacity=Math.max(0,0.55-tr.life*1.8); tr.m.scale.multiplyScalar(1+dt*1.5); if(tr.life>0.4){ fxKill(tr.m); p.trailMeshes.splice(j,1);} }
     const mp=p.mesh.position;
-    const hit=missileHitsTarget(mp);
+    const hit=missileHitsTarget(_prev,mp);
     const hitWall=Math.abs(mp.x)>PLAY_HALF+0.4||Math.abs(mp.z)>PLAY_HALF+0.4;
     const hitCover=!hit && pointInObstacles(mp); // structures detonate missiles too
     if(hit && !p.hitDone){ p.hitDone=true; explodeMissile(mp.clone(),p.dmg,p.radius,p.big); destroyProj(i); }
@@ -1069,8 +1353,8 @@ function updateProjectiles(dt){
 }
 function updateExplosions(dt){
   for(let i=explosions.length-1;i>=0;i--){ const e=explosions[i]; e.life+=dt; const k=e.life/e.dur;
-    if(k>=1){ fxFree(e.flash); if(e.ringM) scene.remove(e.ringM); e.parts.forEach(p=>fxFree(p.m)); explosions.splice(i,1); continue; }
-    e.flash.scale.setScalar(1+k*3.2); e.flash.material.opacity=0.95*(1-k);
+    if(k>=1){ if(e.flash) fxFree(e.flash); if(e.ringM) fxFree(e.ringM); e.parts.forEach(p=>fxFree(p.m)); explosions.splice(i,1); continue; }
+    if(e.flash){ e.flash.scale.setScalar(1+k*3.2); e.flash.material.opacity=0.95*(1-k); }
     if(e.ringM){ e.ringM.scale.setScalar(1+k*4); e.ringM.material.opacity=0.9*(1-k); }
     for(const p of e.parts){ p.life+=dt; p.v.y-=dt*12; p.m.position.addScaledVector(p.v,dt); p.m.material.opacity=Math.max(0,1-p.life/p.dur); if(p.m.position.y<0.05){p.m.position.y=0.05;p.v.y*=-0.4;} }
   }
@@ -1081,7 +1365,13 @@ function flashBtn(i){ // brief synergy-feedback flash on an ability button
 }
 function applyDamage(t, dmg, at, kick=1, src=null){
   if(!t.alive) return;
-  t.health-=dmg; t.flash=Math.min(1.5,kick); t.recoil=Math.min(1.5,kick);
+  t.health-=dmg;
+  // DAMAGE-SCALED REACTION: reaction strength follows the size of the hit, so
+  // light ticks (burn poke, laser pips) stay readable while real explosives
+  // (stage-3, pyro, nova) sell their weight. Clamped so nothing ever breaks or
+  // becomes permanently stuck — every reaction decays back to neutral.
+  const reactK=THREE.MathUtils.clamp(0.30+dmg*0.042,0.22,1.5);
+  t.flash=Math.min(1.5,kick*reactK); t.recoil=Math.min(1.5,kick*reactK);
   // red flash handled in update; recoil lean scales with kick, always recovers
   const wp=t.rig.group.position.clone(); wp.y=2.3;
   spawnDamageNumber(wp,dmg,dmg>28);
@@ -1094,6 +1384,12 @@ function applyDamage(t, dmg, at, kick=1, src=null){
   if(killed) SFX.hitmarkerKill(); else SFX.hitmarker();
   if(src==='spin' || src==='laser'){ triggerShake(0.05,0.08); }
   if(t.health<=0){ t.alive=false; t.health=0; t.respawnT=RESPAWN_DELAY; updateHealthBar(t);
+    // burning stops immediately on elimination (no post-death ticks, aura hides)
+    try{ clearBurn(t); }catch(e){}
+    // HIT-STOP ON KILL for sustained sources: lasers/spells already tense the
+    // shot, so a brief freeze lands the elimination (missiles get theirs via
+    // explodeMissile). Short enough to never interrupt input.
+    if(src==='laser'||src==='spin'||src==='flame'||src==='nova'||src==='pyro'||src==='burn') hitStop(0.045);
     // death: fall over, then respawn after a few seconds at a new valid spot
     toast('TARGET DOWN!'); updateKillCounter();
     // SYNERGY focus payoff: a laser kill refunds volley cooldown (focused pressure rewarded)
@@ -1124,7 +1420,10 @@ addEventListener('pointerdown',e=>{ ensureAudio(); if(e.target.closest('#joystic
 addEventListener('pointermove',e=>{ if(!dragging||e.pointerId!==dragId)return; const dx=e.clientX-lastX, dy=e.clientY-lastY; lastX=e.clientX; lastY=e.clientY;
   if(Math.hypot(e.clientX-tapDownX,e.clientY-tapDownY)>10) tapMoved=true;
   camYaw-=dx*0.005*Settings.sensitivity; camPitch+=dy*0.0045*Settings.sensitivity;
-  camPitch=THREE.MathUtils.clamp(camPitch,-1.55,1.55); },{passive:true});
+  // TPS pitch limit (±66°): a near-vertical clamp makes the orbit flip controls
+  // and breaks aim-reading; a tight limit keeps camera-relative movement and
+  // aiming legible at every angle, like commercial third-person shooters.
+  camPitch=THREE.MathUtils.clamp(camPitch,-1.15,1.15); },{passive:true});
 addEventListener('pointerup',e=>{ if(e.pointerId===dragId){dragging=false;dragId=null;
   // tap (not drag) on open space: try manual target lock, never disturbs camera
   if(!tapMoved && performance.now()-tapDownT<350) tryTapLock(e.clientX,e.clientY);
@@ -1190,6 +1489,21 @@ let kickAmt=0; // decaying dolly offset along view dir (positive = pull back)
 function triggerShake(amp,dur){ if(!Settings.shake) return; shakeAmp=Math.max(shakeAmp,amp); shakeT=Math.max(shakeT,dur); }
 function camKick(strength){ if(!Settings.shake) return; kickAmt=Math.min(0.55,kickAmt+strength); }
 function hitVignette(){ const v=document.getElementById('hit-vignette'); v.style.opacity='1'; setTimeout(()=>v.style.opacity='0',130); }
+/* Screen-space gated impact feedback: only flash the vignette when the impact is
+   actually ON SCREEN. Off-screen blasts (behind the player, through cover) must
+   still shake/feel — but a full-screen flash for something you cannot see is
+   noise, not feedback. */
+const _vgNdc=new THREE.Vector3();
+function hitVignetteAt(pos, strength=0.9){
+  if(!pos){ hitVignette(); return; }
+  _vgNdc.copy(pos).project(camera);
+  if(_vgNdc.z>1){ return; }
+  const sx=(_vgNdc.x*0.5+0.5)*innerWidth, sy=(-_vgNdc.y*0.5+0.5)*innerHeight;
+  if(sx<-60||sx>innerWidth+60||sy<-60||sy>innerHeight+60) return; // off-screen: no flash
+  const v=document.getElementById('hit-vignette');
+  v.style.opacity=String(Math.min(1,strength));
+  clearTimeout(v._h); v._h=setTimeout(()=>v.style.opacity='0',130);
+}
 /* hit-stop: momentary world slowdown on impacts. Input + camera keep real dt. */
 let hitStopT=0;
 let _wasStopped=false;
@@ -1211,11 +1525,75 @@ function updateScreenFlash(dt){
 }
 
 /* ============ IRON MAN ABILITIES ============ */
-function requireIronman(){ if(Settings.character!=='ironman'){ toast('SELECT IRONMAN FIRST'); openCharPanel(true); return false; } return true; }
+/* ============ HERO SELECTION (IRONMAN + HUMAN TORCH) ============ */
+const HEROES=[
+  {id:'ironman', name:'IRONMAN', desc:'Flight-capable combat kit · missiles · repulsors · laser'},
+  {id:'torch', name:'HUMAN TORCH', desc:'Fire-powered kit · fireballs · flame blast · nova · pyro burst · fire flight'}
+];
+let charPreviewIdx=0;
+function heroById(id){ return HEROES.find(h=>h.id===id)||HEROES[0]; }
+function renderCharPreview(){
+  const h=HEROES[charPreviewIdx];
+  const pv=document.getElementById('char-preview');
+  if(pv){
+    if(h.id==='torch'){
+      pv.innerHTML='<svg width="70" height="110" viewBox="0 0 70 110"><g stroke="#ffb14d" stroke-width="5" stroke-linecap="round" fill="none"><circle cx="35" cy="14" r="10" fill="#ff7a1e" stroke="#ffd23f"/>'+
+      '<line x1="35" y1="26" x2="35" y2="62"/><line x1="35" y1="34" x2="16" y2="48"/><line x1="35" y1="34" x2="54" y2="48"/><line x1="35" y1="62" x2="22" y2="100"/><line x1="35" y1="62" x2="48" y2="100"/></g>'+
+      '<g fill="#ff5a00" opacity="0.9"><circle cx="16" cy="50" r="2.4"/><circle cx="54" cy="50" r="2.4"/><circle cx="35" cy="4" r="2"/></g></svg>';
+    } else {
+      pv.innerHTML='<svg width="70" height="110" viewBox="0 0 70 110"><g stroke="#e8eaee" stroke-width="5" stroke-linecap="round" fill="none"><circle cx="35" cy="14" r="10" fill="#e8eaee" stroke="none"/><line x1="35" y1="26" x2="35" y2="62"/><line x1="35" y1="34" x2="16" y2="48"/><line x1="35" y1="34" x2="54" y2="48"/><line x1="35" y1="62" x2="22" y2="100"/><line x1="35" y1="62" x2="48" y2="100"/></g></svg>';
+    }
+  }
+  document.getElementById('char-name').textContent=h.name;
+  document.getElementById('char-desc').textContent=h.desc;
+  const sel=document.getElementById('char-select');
+  if(Settings.character===h.id){ sel.textContent='✓ '+h.name+' ACTIVE'; sel.classList.add('selected'); }
+  else { sel.textContent='SELECT '+h.name; sel.classList.remove('selected'); }
+}
+function refreshAbilityUI(){
+  // Per-hero button labels/titles/accents. abBtns order: [0]=AB1 [1]=AB2 [2]=AB3 [3]=FLY
+  try{
+    const isTorch=Settings.character==='torch';
+    const defs=isTorch?[
+      {label:'BLAST', title:'Flame Blast — forward cone of fire', acc:'#ff8a2a'},
+      {label:'NOVA', title:'Fire Explosion — burst around you', acc:'#ff5252'},
+      {label:'PYRO', title:'Pyrokinetic Burst — explosive fire bolt', acc:'#ffd23f'},
+      {label:'FLY', title:'Flight — fire propulsion', acc:'#ff7a1e'}
+    ]:[
+      {label:'SPIN', title:'Repulsor Spin', acc:'#7cc4ff'},
+      {label:'VOLLEY', title:'Missile Volley', acc:'#f0a35e'},
+      {label:'BEAM', title:'Dual-Hand Laser', acc:'#ff7a7a'},
+      {label:'FLY', title:'Flight', acc:'#9fe870'}
+    ];
+    abBtns.forEach((b,i)=>{
+      const d=defs[i]; if(!d) return;
+      b.title=d.title; b.style.setProperty('--acc',d.acc);
+      const lb=b.querySelector('.blabel'); if(lb) lb.textContent=d.label;
+    });
+    const atk=document.getElementById('btn-attack');
+    if(atk) atk.title=isTorch?'Fireball — fast flame bolt':'Fire missile';
+  }catch(e){}
+}
+function selectCharacter(id){
+  ensureAudio(); SFX.ui();
+  Settings.character=id;
+  charPreviewIdx=Math.max(0,HEROES.findIndex(h=>h.id===id));
+  respawnPlayer();
+  refreshAbilityUI();
+  updateCombatDisabled();
+  renderCharPreview();
+  document.getElementById('char-panel').classList.remove('open');
+  toast(id==='torch'?'HUMAN TORCH READY — FLAME ON!':'IRONMAN READY');
+}
+function requireHero(){ if(Settings.character!=='ironman'&&Settings.character!=='torch'){ toast('SELECT A CHARACTER FIRST'); openCharPanel(true); return false; } return true; }
+function requireIronman(){ return requireHero(); }
+function requireIronmanKit(){ if(Settings.character!=='ironman'){ toast('IRONMAN ABILITY — SELECT IRONMAN'); return false; } return true; }
+function requireTorchKit(){ if(Settings.character!=='torch'){ toast('TORCH ABILITY — SELECT HUMAN TORCH'); return false; } return true; }
 function cancelOthers(except){
   if(except!=='spin' && AB.spin.t>0) endSpin(true);
   if(except!=='laser' && (AB.laser.t>0||AB.laser.holding)) endLaser(true);
   if(except!=='fly' && player.flying) endFlight(true);
+  if(except!=='flame' && AB.flame.t>0) endFlame(true);
 }
 function palmWorld(hand){ const v=new THREE.Vector3(); hand.getWorldPosition(v); return v; }
 // --- short beam flashes (repulsor) ---
@@ -1239,7 +1617,7 @@ function updateBeams(dt){
 function startSpin(){
   ensureAudio(); if(AB.spin.t>0) return;
   if(AB.spin.cd>0){ SFX.empty(); return; }
-  if(!requireIronman()) return;
+  if(!requireIronmanKit()) return;
   cancelOthers('spin');
   const sk=activeKit().abilities.spin; AB.spin.cdMax=sk.cd; AB.spin.dur=sk.dur;
   AB.spin.t=AB.spin.dur; AB.spin.tick=0; AB.spin.burst=0; AB.spin.lastHit={};
@@ -1253,7 +1631,7 @@ function startSpin(){
 }
 function endSpin(restore=true){
   if(AB.spin.t<=0 && !abBtns[0].classList.contains('ability-active')) return;
-  AB.spin.t=0; player.speed=BASE_SPEED; AB.spin.lastHit={};
+  AB.spin.t=0; try{ player.speed=activeKit().baseSpeed; }catch(e){ player.speed=BASE_SPEED; } AB.spin.lastHit={};
   abBtns[0].classList.remove('ability-active');
   stopSpinHum();
   if(restore) AB.spin.cd=AB.spin.cdMax;
@@ -1314,7 +1692,7 @@ function spawnPalmBurst(p,color=0x9fe8ff){
 // --- ABILITY 2: six curving missiles ---
 function startVolley(){
   ensureAudio(); if(AB.volley.cd>0){ SFX.empty(); return; }
-  if(!requireIronman()) return;
+  if(!requireIronmanKit()) return;
   // Works grounded AND airborne: flight is positioning, volley is pressure.
   // Never cancels flight — smooth air-to-volley transition by design.
   const hand=handWorldPos();
@@ -1324,23 +1702,43 @@ function startVolley(){
   const wantYaw=Math.atan2((aimPoint.x-hand.x),(aimPoint.z-hand.z));
   let dy=wantYaw-player.yaw; while(dy>Math.PI)dy-=Math.PI*2; while(dy<-Math.PI)dy+=Math.PI*2;
   player.yaw+=dy*0.7; // ease toward launch — no snap, keeps strafe coherent
+  // MULTI-TARGET DISTRIBUTION: a Marvel-Rivals volley pressures a GROUP, not a
+  // single dummy six times over. Locked target gets the lead pair; remaining
+  // missiles are assigned round-robin to the other valid targets closest to the
+  // launch direction (each needs 2 missiles minimum to matter). Without aim
+  // assist every missile keeps the raw aim point (manual aiming stays honest).
+  let assign=[tgt];
+  if(Settings.aimAssist){
+    const adir=aimPoint.clone().sub(hand); adir.y=0; adir.normalize();
+    const others=targets.filter(t=>t.alive&&t!==tgt).map(t=>{
+      const to=t.rig.group.position.clone().sub(hand); to.y=0;
+      const len=to.length(); if(len<1) return null;
+      to.divideScalar(len);
+      const ang=adir.angleTo(to);
+      if(ang>0.5) return null;
+      const incam=(typeof camera!=='undefined')?camera.position.distanceTo(t.rig.group.position):len;
+      if(incam>MAX_DIST) return null;
+      return {t,ang};
+    }).filter(Boolean).sort((a,b)=>a.ang-b.ang).map(o=>o.t).slice(0,2);
+    for(const o of others) if(assign.length<3) assign.push(o);
+  }
   const vk=activeKit().abilities.volley; AB.volley.cdMax=vk.cd;
   for(let i=0;i<vk.count;i++){
     const side=(i%2?1:-1), k=Math.ceil(i/2);
     const p0=hand.clone().add(new THREE.Vector3(side*(0.4+k*0.35),0.3+k*0.25,-0.3));
     const mid=hand.clone().lerp(aimPoint,0.45);
     const p1=mid.clone().add(new THREE.Vector3(side*(3+k*1.6),4.5+k*1.2,(k-1)*2.2));
+    const mt=Settings.aimAssist?assign[i%assign.length]:null;
     volleyMissiles.push({mesh:buildMissileMesh(i<2), p0,p1,p2:aimPoint.clone(), t:-i*0.09, speed:0.9+Math.random()*0.25,
-      target:tgt, dmg:vk.dmg, radius:vk.radius, hitDone:false, smokeT:0, trailMeshes:[], track:!!(tgt&&Settings.aimAssist)});
+      target:mt, dmg:vk.dmg, radius:vk.radius, hitDone:false, smokeT:0, trailMeshes:[], track:!!(mt&&Settings.aimAssist)});
   }
   for(const v of volleyMissiles.slice(-6)){ v.mesh.group.position.copy(v.p0); scene.add(v.mesh.group); }
   AB.volley.cd=AB.volley.cdMax;
   AB.volley.hitSet={}; // synergy ledger: distinct direct hits refund spin cooldown
-  SFX.missile(); triggerShake(0.15,0.15); camKick(0.10);
+  SFX.missile(); triggerShake(0.15,0.15); camKick(0.10); fovPunch(1.4);
   player.volleyPose=0.6; // brief launch pose
 }
 function bez(p0,p1,p2,t,out){ const a=1-t; out.set(0,0,0).addScaledVector(p0,a*a).addScaledVector(p1,2*a*t).addScaledVector(p2,t*t); return out; }
-const _bv=new THREE.Vector3(), _bv2=new THREE.Vector3();
 function updateVolley(dt){
   for(let i=volleyMissiles.length-1;i>=0;i--){ const m=volleyMissiles[i];
     if(m.t<0){ m.t+=dt; continue; } // staggered launches
@@ -1348,6 +1746,7 @@ function updateVolley(dt){
     if(m.track && m.target && m.target.alive){ m.p2.copy(m.target.rig.group.position); m.p2.y=1.35; }
     m.t+=dt*m.speed;
     const t=Math.min(1,m.t);
+    if(!m.prev) m.prev=m.p0.clone();
     bez(m.p0,m.p1,m.p2,t,_bv);
     bez(m.p0,m.p1,m.p2,Math.min(1,t+0.02),_bv2);
     _bv2.sub(_bv);
@@ -1359,38 +1758,42 @@ function updateVolley(dt){
       if(tm){ tm.position.copy(_bv); m.trailMeshes.push({m:tm,life:0}); }
     }
     for(let j=m.trailMeshes.length-1;j>=0;j--){ const tr=m.trailMeshes[j]; tr.life+=dt; tr.m.material.opacity=Math.max(0,0.5-tr.life*1.5); tr.m.scale.multiplyScalar(1+dt); if(tr.life>0.45){ fxKill(tr.m); m.trailMeshes.splice(j,1);} }
-    const hit=!m.hitDone && missileHitsTarget(_bv);
+    const hit=!m.hitDone && missileHitsTarget(m.prev,_bv);
+    m.prev.copy(_bv);
     const hitCover=!hit && pointInObstacles(_bv);
     // volley impacts: substantially larger presence, same damage/collision rules
     if(hit){
       m.hitDone=true;
       // SYNERGY pressure→punish: each distinct direct hit refunds spin cooldown (no stacking per target)
       if(AB.volley.hitSet && !AB.volley.hitSet[hit.uid]){
-        AB.volley.hitSet[hit.uid]=1;
         AB.spin.cd=Math.max(0,AB.spin.cd-activeKit().synergy.volleySpinRefund);
         flashBtn(0);
       }
-      explodeMissile(_bv.clone(),m.dmg,m.radius,false,1.6,1.2); cleanupVolley(i);
+      explodeMissile(_bv.clone(),m.dmg,m.radius,false,1.6,1.2,AB.volley.hitSet); cleanupVolley(i);
     }
     else if(t>=1 || _bv.y<0.12 || hitCover || Math.abs(_bv.x)>PLAY_HALF+0.4 || Math.abs(_bv.z)>PLAY_HALF+0.4){
-      if(!m.hitDone) explodeMissile(_bv.clone(),hitCover?m.dmg:m.dmg*0.6,m.radius,false,1.6,1.0);
+      if(!m.hitDone) explodeMissile(_bv.clone(),hitCover?m.dmg:m.dmg*0.6,m.radius,false,1.6,1.0,AB.volley.hitSet);
       cleanupVolley(i);
     }
   }
 }
-function cleanupVolley(i){ const m=volleyMissiles[i]; scene.remove(m.mesh.group); m.trailMeshes.forEach(t=>fxKill(t.m)); volleyMissiles.splice(i,1); }
+function cleanupVolley(i){ const m=volleyMissiles[i]; freeShotGroup(m.mesh.group); m.trailMeshes.forEach(t=>fxKill(t.m)); volleyMissiles.splice(i,1); }
 // --- ABILITY 3: continuous dual-hand laser (short range, manual toggle) ---
 // Deliberately short, controlled range; airborne adds a small bonus (aerial superiority).
 function laserRange(){ const k=activeKit().abilities.laser; return k.range+(player.flyH>1?k.airRangeBonus:0); }
-let laserCore=null, laserGlow=null, laserHit=null, palmGlowL=null, palmGlowR=null, laserTip=null;
+let laserCore=null, laserGlow=null, palmGlowL=null, palmGlowR=null, laserTip=null;
 function startLaser(){
   ensureAudio(); if(AB.laser.holding) return;
   if(AB.laser.cd>0){ SFX.empty(); return; }
-  if(!requireIronman()) return;
-  if(player.flying) endFlight(true); // incompatible: land first
+  if(!requireIronmanKit()) return;
+  // Aerial laser is allowed: flight is positioning, laser is focused pressure.
+  // Hover becomes stable while lasing (see updateFlight) instead of forcing a landing.
   if(AB.spin.t>0) endSpin(true);
   const lk=activeKit().abilities.laser; AB.laser.cdMax=lk.cd; AB.laser.durMax=lk.dur;
   AB.laser.holding=true; AB.laser.t=AB.laser.durMax; AB.laser.tick=0;
+  AB.laser.beamId=(AB.laser.beamId||0)+1; // unique id per beam hold: clash detection keys off this to prevent re-trigger bugs
+  // Safety: never inherit a stale clash from a previous hold (respawn / rig swap / cancel paths)
+  try{ if(typeof endBeamClash==='function' && beamClash) endBeamClash('restart', false); }catch(e){}
   const q=Q(), w=q.beamWidth;
   laserCore=new THREE.Mesh(beamGeoUnit,new THREE.MeshBasicMaterial({color:0xeaffff,transparent:true,opacity:0.95,blending:THREE.AdditiveBlending,depthWrite:false}));
   laserGlow=new THREE.Mesh(beamGeoUnit,new THREE.MeshBasicMaterial({color:0x54d8ff,transparent:true,opacity:0.4,blending:THREE.AdditiveBlending,depthWrite:false}));
@@ -1431,17 +1834,44 @@ function updateLaser(dt){
     const c=lockedTarget.rig.group.position.clone(); c.y=1.35; dir=c.sub(origin).normalize();
   } else dir=computeAimPoint(130).sub(origin).normalize();
   const {point,dist}=laserEndpoint(origin,dir);
+  // ---- BEAM CLASH: per-frame compatible-beam detection (fast, not tick-gated) ----
+  // Finds the nearest clash-capable training target actually struck by this beam
+  // segment (respects range via dist + radius check). LOS/occlusion is validated
+  // inside tryTriggerClash so cover never starts a clash.
+  try{
+    if(!beamClash && clashCooldownT<=0 && AB.laser.beamId!==lastClashBeamId){
+      let hitT=null, hitD=1.4;
+      for(const t of targets){
+        if(!t.alive || t.canClash===false) continue;
+        const c=t.rig.group.position.clone(); c.y=1.3;
+        const along=c.clone().sub(origin).dot(dir);
+        if(along<1||along>dist) continue;
+        const perp=origin.clone().addScaledVector(dir,along).distanceTo(c);
+        if(perp<hitD){ hitD=perp; hitT=t; }
+      }
+      if(hitT) tryTriggerClash(hitT, origin, dir, dist);
+    }
+  }catch(e){}
+  // Advance pending/active clash BEFORE rendering so the player beam can be
+  // truncated at the live collision point this same frame (no overlap/passthrough).
+  let clashPoint=null;
+  try{ clashPoint=updateBeamClash(dt, origin, dir, dist); }catch(e){ clashPoint=null; }
+  const renderEnd=(clashPoint||point);
+  const renderDist=clashPoint?Math.max(0.1,origin.distanceTo(clashPoint)):dist;
   for(const [mesh,w] of [[laserCore,0.07*Q().beamWidth],[laserGlow,0.22*Q().beamWidth]]){
-    mesh.position.copy(origin).add(point).multiplyScalar(0.5);
-    mesh.scale.set(w,Math.max(0.1,dist),w);
-    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),dir);
+    mesh.position.copy(origin).add(renderEnd).multiplyScalar(0.5);
+    mesh.scale.set(w,Math.max(0.1,renderDist),w);
+    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),clashPoint?renderEnd.clone().sub(origin).normalize():dir);
   }
   palmGlowL.position.copy(L); palmGlowR.position.copy(R);
   const s=1+Math.random()*0.25; palmGlowL.scale.setScalar(s); palmGlowR.scale.setScalar(s);
-  if(laserTip){ laserTip.position.copy(point); laserTip.scale.setScalar(1+0.15*Math.sin(performance.now()*0.03)); }
+  if(laserTip){
+    if(clashPoint){ laserTip.visible=false; } // clash core replaces the normal tip
+    else { laserTip.visible=true; laserTip.position.copy(point); laserTip.scale.setScalar(1+0.15*Math.sin(performance.now()*0.03)); }
+  }
   if(laserHum){ try{ laserHum.o.frequency.value=95+9*Math.sin(performance.now()*0.025); }catch(e){} }
-  // impact feedback at endpoint (quality-scaled, pooled)
-  if(Math.random()<Q().smokeRate){
+  // impact feedback at endpoint (quality-scaled, pooled) — suppressed during clash (clash FX owns the point)
+  if(!clashPoint && Math.random()<Q().smokeRate){
     const pm=fxSpawn(smokeGeo,0x9fe8ff,true,0.8);
     if(pm){ pm.position.copy(point); explosions.push({flash:pm,parts:[],ringM:null,life:0,dur:0.15}); }
   }
@@ -1454,17 +1884,275 @@ function updateLaser(dt){
       if(!t.alive) continue;
       const c=t.rig.group.position.clone(); c.y=1.3;
       const along=c.clone().sub(origin).dot(dir);
-      if(along<1||along>dist) continue;
+      if(along<1||along>renderDist) continue;
       const perp=origin.clone().addScaledVector(dir,along).distanceTo(c);
       if(perp<bestD){ bestD=perp; bestT=t; }
     }
     if(bestT) applyDamage(bestT,lk.dmg,bestT.rig.group.position.clone().setY(1.6),0.4,'laser');
   }
 }
+/* ============ BEAM CLASH SYSTEM ============
+   Special training-target counter-beam: when a compatible beam ability (laser)
+   strikes a clash-capable target, the target answers with its own beam a few
+   milliseconds later. Both beams truncate at a shared collision point between
+   the sources (never overlapping/passing through) with a continuous high-energy
+   clash effect. Fully integrated: respects beam range, line of sight, obstacle
+   collision, ability duration and target validity; reuses the pooled FX, light,
+   shake, hit-stop and audio buses; quality-scaled for mobile.
+   Lifecycle: pending (reaction delay) -> active (both beams + FX) ->
+   resolved (final burst + full cleanup). One clash at a time + per-beam id + a
+   short cooldown prevents repeated-activation bugs while allowing clean re-fire. */
+const CLASH={
+  reactionDelay:0.008,  // configurable reaction delay (seconds, ~8ms)
+  bias:0.55,            // collision point lerp player->target (0.5 = midpoint)
+  enemyDur:3.2,         // target beam max lifetime; expiry resolves clash, player beam continues
+  cooldown:0.5,         // post-clash lockout before a NEW beam may clash again
+  enemyCoreCol:0xfff2f5,
+  enemyGlowCol:0xff4d81,
+  shakeAmp:0.07
+};
+let beamClash=null;      // {phase,target,beamId,delayT,enemyT,point,enemyCore,enemyGlow,enemyTip,core,glow,heat,rings,sparks,sparkT,shockT,hum,time}
+let clashCooldownT=0;
+let lastClashBeamId=-1;
+let clashHum=null;
+// Intense clash audio: layered start crack + sustained bed + resolving burst (uses the mastered mix bus).
+try{
+  SFX.clashStart=function(){ ensureAudio(); click(0,0.26,1500); sweep(vary(160),vary(1100),0.3,'sawtooth',0.2,0.02); whoosh(0.4,0.22,500,3800,0.02); thump(0.4); noiseBurst(0.3,0.3,2200); };
+  SFX.clashEnd=function(){ ensureAudio(); noiseBurst(0.5,0.5,900); thump(0.55); beep(90,0.45,'sine',0.45,-50); sweep(vary(900),vary(140),0.3,'sawtooth',0.16); };
+}catch(e){}
+const clashCoreGeo=new THREE.SphereGeometry(0.30,14,12);
+const clashGlowGeo=new THREE.SphereGeometry(0.52,14,12);
+const clashHeatGeo=new THREE.SphereGeometry(0.85,14,12);
+const clashTipGeo=new THREE.SphereGeometry(0.16,10,8);
+const clashRingGeo=new THREE.RingGeometry(0.32,0.62,32);
+function isCompatibleBeam(kind){ return kind==='laser'; } // single gate for future beam abilities
+function clashTargetChest(t,out){ out=out||new THREE.Vector3(); out.copy(t.rig.group.position); out.y+=1.35; return out; }
+function startClashHum(){
+  ensureAudio(); if(!audioCtx||clashHum) return;
+  try{
+    const o=audioCtx.createOscillator(), o2=audioCtx.createOscillator(), g=audioCtx.createGain();
+    o.type='sawtooth'; o.frequency.value=68; o2.type='square'; o2.frequency.value=142;
+    const g2=audioCtx.createGain(); g2.gain.value=0.35; o2.connect(g2); g2.connect(g);
+    o.connect(g); g.connect(masterGain); g.gain.value=0.075;
+    o.start(); o2.start(); clashHum={o,o2,g};
+    duckBus(0.7,0.12);
+  }catch(e){ clashHum=null; }
+}
+function stopClashHum(){ if(!clashHum) return; try{ const h=clashHum; clashHum=null; h.g.gain.setTargetAtTime(0.0001,audioCtx.currentTime,0.05); h.o.stop(audioCtx.currentTime+0.2); h.o2.stop(audioCtx.currentTime+0.2); }catch(e){ clashHum=null; } }
+function tryTriggerClash(target, origin, dir, dist){
+  if(beamClash||clashCooldownT>0) return false;                 // single-clash guard + cooldown
+  if(!target||!target.alive||!targets.includes(target)) return false;
+  if(target.canClash===false) return false;
+  if(!isCompatibleBeam('laser')) return false;
+  if(!AB.laser.holding) return false;
+  if(AB.laser.beamId===lastClashBeamId) return false;           // same hold never re-triggers
+  const chest=clashTargetChest(target);
+  if(origin.distanceTo(chest)>laserRange()+1.0) return false;   // respects beam range
+  try{ if(typeof losBlocked==='function' && losBlocked(origin,chest)) return false; }catch(e){} // respects cover/LoS
+  beamClash={ phase:'pending', target, beamId:AB.laser.beamId, delayT:CLASH.reactionDelay,
+    enemyT:CLASH.enemyDur, point:null, enemyCore:null, enemyGlow:null, enemyTip:null,
+    core:null, glow:null, heat:null, rings:[], sparkT:0, shockT:0, time:0 };
+  lastClashBeamId=AB.laser.beamId;
+  return true;
+}
+function activateClash(origin){
+  const c=beamClash; if(!c||c.phase!=='pending') return false;
+  const t=c.target;
+  if(!AB.laser.holding||!t||!t.alive||!targets.includes(t)){ beamClash=null; return false; }
+  const chest=clashTargetChest(t);
+  if(origin.distanceTo(chest)>laserRange()+1.0){ beamClash=null; return false; }
+  try{ if(typeof losBlocked==='function' && losBlocked(origin,chest)) { beamClash=null; return false; } }catch(e){}
+  const q=Q(), w=q.beamWidth;
+  c.enemyCore=new THREE.Mesh(beamGeoUnit,new THREE.MeshBasicMaterial({color:CLASH.enemyCoreCol,transparent:true,opacity:0.95,blending:THREE.AdditiveBlending,depthWrite:false}));
+  c.enemyGlow=new THREE.Mesh(beamGeoUnit,new THREE.MeshBasicMaterial({color:CLASH.enemyGlowCol,transparent:true,opacity:0.45,blending:THREE.AdditiveBlending,depthWrite:false}));
+  c.enemyCore.scale.set(0.07*w,1,0.07*w); c.enemyGlow.scale.set(0.24*w,1,0.24*w);
+  scene.add(c.enemyCore,c.enemyGlow);
+  c.enemyTip=new THREE.Mesh(clashTipGeo,new THREE.MeshBasicMaterial({color:CLASH.enemyGlowCol,transparent:true,opacity:0.85,blending:THREE.AdditiveBlending,depthWrite:false}));
+  scene.add(c.enemyTip);
+  c.core=new THREE.Mesh(clashCoreGeo,new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:0.98,blending:THREE.AdditiveBlending,depthWrite:false}));
+  c.glow=new THREE.Mesh(clashGlowGeo,new THREE.MeshBasicMaterial({color:0xffd76e,transparent:true,opacity:0.55,blending:THREE.AdditiveBlending,depthWrite:false}));
+  scene.add(c.core,c.glow);
+  c.heat=null;
+  if(Settings.quality!=='low'){ // heat-distortion approximation: shimmer shell (true refraction needs postprocessing)
+    c.heat=new THREE.Mesh(clashHeatGeo,new THREE.MeshBasicMaterial({color:0x9fe8ff,transparent:true,opacity:0.10,blending:THREE.AdditiveBlending,depthWrite:false}));
+    scene.add(c.heat);
+  }
+  c.rings=[];
+  const nRings=(Settings.quality==='low'?0:(Settings.quality==='medium'?2:3));
+  for(let i=0;i<nRings;i++){
+    const rm=new THREE.Mesh(clashRingGeo,new THREE.MeshBasicMaterial({color:i%2?0xffd76e:0xffffff,transparent:true,opacity:0.8,side:THREE.DoubleSide,blending:THREE.AdditiveBlending,depthWrite:false}));
+    scene.add(rm); c.rings.push({m:rm,life:i*(0.5/Math.max(1,nRings)),dur:0.5});
+  }
+  // Ideal first point: biased lerp strictly between the sources (never past either end)
+  const ideal=origin.clone().lerp(chest,CLASH.bias);
+  c.point=ideal.clone();
+  c.phase='active'; c.time=0;
+  startClashHum();
+  try{ SFX.clashStart(); }catch(e){}
+  try{ toast('BEAM CLASH!'); }catch(e){}
+  try{ triggerShake(0.18,0.22); camKick(0.10); screenPulse('255,220,120',0.16,0.3); }catch(e){}
+  return true;
+}
+function clashIdealPoint(origin, chest, time, out){
+  out.copy(origin).lerp(chest,CLASH.bias);
+  // Visible push-and-pull: beams shove against each other along the axis + slight lateral shimmer
+  const push=Math.sin(time*21.0)*0.28+Math.sin(time*13.7+1.3)*0.18;
+  const axis=chest.clone().sub(origin); const len=Math.max(0.001,axis.length()); axis.divideScalar(len);
+  out.addScaledVector(axis,push);
+  const jt=0.06;
+  out.x+=Math.sin(time*31.0)*jt; out.y+=Math.cos(time*27.0)*jt; out.z+=Math.sin(time*23.0+0.7)*jt;
+  return out;
+}
+const _clashIdeal=new THREE.Vector3(), _clashChest=new THREE.Vector3(), _clashDir=new THREE.Vector3(), _clashUp=new THREE.Vector3(0,1,0);
+function setBeamMesh(mesh, from, to, width){
+  _clashDir.copy(to).sub(from); const len=Math.max(0.1,_clashDir.length()); _clashDir.divideScalar(len);
+  mesh.position.copy(from).add(to).multiplyScalar(0.5);
+  mesh.scale.set(width,len,width);
+  mesh.quaternion.setFromUnitVectors(_clashUp,_clashDir);
+}
+function updateBeamClash(dt, origin, dir, dist){
+  if(clashCooldownT>0) clashCooldownT-=dt;
+  if(!beamClash){
+    // Safety: if the player beam died without endLaser (respawn/rig swap race), nothing lingers.
+    return null;
+  }
+  const c=beamClash;
+  // Pending: count down the configurable few-ms reaction delay, re-validating each frame.
+  if(c.phase==='pending'){
+    c.delayT-=dt;
+    if(!AB.laser.holding){ beamClash=null; return null; } // player released before answer: silent cancel, no ghost beam
+    if(!c.target||!c.target.alive||!targets.includes(c.target)){ beamClash=null; return null; }
+    if(c.delayT<=0){
+      const org=origin||palmWorld(playerRig.handL).add(palmWorld(playerRig.handR)).multiplyScalar(0.5);
+      if(!activateClash(org.clone())){ beamClash=null; return null; }
+    } else return null;
+  }
+  if(c.phase!=='active'||!c.point) return null;
+  // ---- Validity: ability duration, target, range, LoS. Any failure resolves cleanly. ----
+  if(!AB.laser.holding){ endBeamClash('player-end', true); return null; } // player ended -> enemy dies instantly + final burst
+  const t=c.target;
+  if(!t||!t.alive||!targets.includes(t)){ endBeamClash('target-invalid', true); return null; }
+  c.enemyT-=dt;
+  if(c.enemyT<=0){ endBeamClash('enemy-end', true); return null; } // target beam ends first -> resolve, player beam continues, no leftovers
+  const pOrg=origin||palmWorld(playerRig.handL).add(palmWorld(playerRig.handR)).multiplyScalar(0.5);
+  clashTargetChest(t,_clashChest);
+  if(pOrg.distanceTo(_clashChest)>laserRange()+2.0){ endBeamClash('range', true); return null; }
+  try{ if(typeof losBlocked==='function' && losBlocked(pOrg,_clashChest)){ endBeamClash('los', true); return null; } }catch(e){}
+  try{ // obstacle between sources shoves the clash out honestly (uses the real beam blockers)
+    obstacleBoxes(_occBoxes);
+    _lray.set(pOrg,_clashChest.clone().sub(pOrg).normalize());
+    const want=pOrg.distanceTo(_clashChest)-0.6;
+    for(const box of _occBoxes){ if(_lray.intersectBox(box,_hitP)){ if(_hitP.distanceTo(pOrg)<want){ endBeamClash('blocked', true); return null; } break; } }
+  }catch(e){}
+  // ---- Collision point: smooth follow as both sources move ----
+  c.time+=dt;
+  clashIdealPoint(pOrg,_clashChest,c.time,_clashIdeal);
+  c.point.lerp(_clashIdeal,Math.min(1,dt*10)); // damped: no popping when strafing/flying
+  const q=Q(), w=q.beamWidth;
+  const flick=1+0.12*Math.sin(c.time*37.0)+0.06*Math.sin(c.time*61.0); // pushing shimmer on both beams
+  setBeamMesh(c.enemyCore,_clashChest,c.point,0.07*w*flick);
+  setBeamMesh(c.enemyGlow,_clashChest,c.point,0.24*w*flick);
+  if(c.enemyTip){ c.enemyTip.position.copy(_clashChest); c.enemyTip.scale.setScalar(1+0.2*Math.sin(c.time*29.0)); }
+  // ---- Continuous high-energy clash effect at the shared point ----
+  const P=c.point;
+  if(c.core){ c.core.position.copy(P); c.core.scale.setScalar(flick*(1+0.18*Math.sin(c.time*43.0))); c.core.rotation.y+=dt*6; }
+  if(c.glow){ c.glow.position.copy(P); c.glow.scale.setScalar((1.15+0.3*Math.sin(c.time*31.0))*flick); }
+  if(c.heat){ c.heat.position.copy(P); const hs=1+0.22*Math.sin(c.time*17.0+0.5); c.heat.scale.set(hs,hs*1.15,hs); c.heat.material.opacity=0.08+0.04*Math.sin(c.time*23.0); }
+  for(const r of c.rings){ // expanding shockwaves, recycled
+    r.life+=dt; if(r.life>=r.dur) r.life-=r.dur;
+    const k=r.life/r.dur;
+    r.m.position.copy(P); r.m.lookAt(camera.position);
+    r.m.scale.setScalar(0.6+k*3.4);
+    r.m.material.opacity=0.85*(1-k);
+  }
+  // Sparks + energy bursts (pooled, quality-scaled, mobile-capped).
+  // Dedicated spark list (NOT the explosion flash path) so sparks fly outward
+  // with velocity + gravity instead of being scaled up like explosion flashes.
+  c.sparks=c.sparks||[];
+  c.sparkT-=dt;
+  const rate=(Settings.quality==='low'?0.06:(Settings.quality==='medium'?0.028:0.014));
+  if(c.sparkT<=0){
+    c.sparkT=rate;
+    const cols=[0xffffff,0xffd76e,0x9fe8ff,0xff7a9e];
+    const n=(Settings.quality==='low'?1:(Settings.quality==='medium'?2:3));
+    for(let i=0;i<n;i++){
+      const pm=fxSpawn(smokeGeo,cols[(Math.random()*cols.length)|0],true,0.95);
+      if(!pm) break;
+      pm.position.copy(P);
+      pm.scale.setScalar(0.7+Math.random()*0.8);
+      const v=new THREE.Vector3((Math.random()-0.5)*2,(Math.random()-0.1)*2,(Math.random()-0.5)*2).normalize().multiplyScalar(4+Math.random()*7);
+      c.sparks.push({m:pm,v,life:0,dur:0.30+Math.random()*0.15});
+      if(c.sparks.length>40){ const old=c.sparks.shift(); fxKill(old.m); }
+    }
+    if(Math.random()<(Settings.quality==='low'?0.25:0.6)){
+      const sm=fxSpawn(smokeGeo,0x777777,false,0.3);
+      if(sm){ sm.position.copy(P); sm.scale.setScalar(0.6); c.sparks.push({m:sm,v:new THREE.Vector3((Math.random()-0.5)*2,1.5,(Math.random()-0.5)*2),life:0,dur:0.5}); }
+    }
+  }
+  for(let i=c.sparks.length-1;i>=0;i--){ const sp=c.sparks[i]; sp.life+=dt;
+    if(sp.life>=sp.dur){ fxKill(sp.m); c.sparks.splice(i,1); continue; }
+    sp.v.y-=dt*9; sp.m.position.addScaledVector(sp.v,dt);
+    if(sp.m.position.y<0.05){ sp.m.position.y=0.05; sp.v.y*=-0.4; }
+    sp.m.material.opacity=Math.max(0,0.95*(1-sp.life/sp.dur));
+  }
+  if(clashHum){ try{ clashHum.o.frequency.value=68+14*Math.sin(c.time*19.0); clashHum.o2.frequency.value=142+30*Math.sin(c.time*27.0); }catch(e){} }
+  if(Math.random()<0.35 && typeof whoosh==='function'){ try{ if(gate('clashcrackle',260)) whoosh(0.18,0.07,1800,4200); }catch(e){} }
+  try{ if(Settings.shake) { triggerShake(CLASH.shakeAmp,0.12); } }catch(e){} // subtle continuous shake, gated by setting
+  if(Q().boomLight||Q().flashLight){ try{ pulseLight(P,3.2+Math.sin(c.time*33.0)*1.1); boomLightT=Math.max(boomLightT,0.08); }catch(e){} }
+  return c.point;
+}
+function clashFinalBurst(point, big=true){
+  if(!point) return;
+  const q=Q(), s=q.boomScale*(big?1.2:0.9);
+  const flash=new THREE.Mesh(new THREE.SphereGeometry(0.55*s,16,14),new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:0.95,blending:THREE.AdditiveBlending,depthWrite:false}));
+  flash.position.copy(point); scene.add(flash);
+  const n=Math.round(q.particles*(big?1.6:1.0));
+  const parts=[];
+  for(let i=0;i<n;i++){
+    const r=Math.random();
+    const col=r<0.35?0xffffff:(r<0.6?0xffd76e:(r<0.8?0x9fe8ff:0xff7a9e));
+    const pm=fxSpawn(r<0.9?fireEmberGeo:smokeGeo,col,r<0.9,1);
+    if(!pm) break;
+    pm.position.copy(point); pm.scale.setScalar(s*(0.8+Math.random()*0.8));
+    const v=new THREE.Vector3((Math.random()-0.5),Math.random()*0.9+0.2,(Math.random()-0.5)).normalize().multiplyScalar((5+Math.random()*9)*s);
+    parts.push({m:pm,v,life:0,dur:0.4+Math.random()*0.25});
+  }
+  let ringM=null;
+  if(Settings.quality!=='low'){ ringM=new THREE.Mesh(new THREE.RingGeometry(0.35*s,0.8*s,32),new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:0.9,side:THREE.DoubleSide,blending:THREE.AdditiveBlending,depthWrite:false})); ringM.position.copy(point); ringM.lookAt(camera.position); scene.add(ringM); }
+  explosions.push({flash,parts,ringM,life:0,dur:0.55});
+  if(q.boomLight) pulseLight(point,8);
+  try{ SFX.clashEnd(); }catch(e){ try{ SFX.explosion(0.9); }catch(_){} }
+  try{ triggerShake(big?0.3:0.18,0.24); camKick(big?0.16:0.08); hitStop(0.06); screenPulse('255,220,130',0.22,0.3); }catch(e){}
+}
+function endBeamClash(reason='player-end', burst=true){
+  const c=beamClash; if(!c) return;
+  const lastP=c.point?c.point.clone():null;
+  try{
+    for(const m of [c.enemyCore,c.enemyGlow,c.enemyTip,c.core,c.glow,c.heat]) if(m) scene.remove(m);
+    for(const r of (c.rings||[])) if(r&&r.m) scene.remove(r.m);
+    for(const sp of (c.sparks||[])) fxKill(sp.m);
+  }catch(e){}
+  // Dispose clash-owned (non-pooled) materials/geometries only; pooled sparks die via explosions[]
+  try{
+    for(const m of [c.enemyCore,c.enemyGlow,c.enemyTip,c.core,c.glow,c.heat]) if(m&&m.material) m.material.dispose();
+    for(const r of (c.rings||[])) if(r&&r.m&&r.m.material) r.m.material.dispose();
+  }catch(e){}
+  beamClash=null;
+  stopClashHum();
+  clashCooldownT=CLASH.cooldown; // reliable re-arm: immediate re-trigger of the same hold is impossible (beamId), new holds wait out cooldown
+  if(burst && lastP && reason!=='restart' && reason!=='cancel'){
+    // Final impact burst at the LAST collision point (player-end and enemy-end both land here)
+    clashFinalBurst(lastP, reason!=='enemy-end');
+  }
+  // Enemy-end resolves WITHOUT touching the player beam: updateLaser keeps rendering normally next frame.
+  // Player-end is called from endLaser which already tears down the player beam: no leftovers either way.
+}
 function endLaser(cool=true){
+  // Player beam ending immediately terminates the target answer-beam + clash (final burst at last point).
+  try{ if(beamClash) endBeamClash(cool?'player-end':'cancel', !!cool); }catch(e){ beamClash=null; }
   if(!AB.laser.holding && !laserCore) return;
   AB.laser.holding=false; AB.laser.t=0;
-  for(const m of [laserCore,laserGlow,palmGlowL,palmGlowR,laserTip]) if(m){ scene.remove(m); }
+  for(const m of [laserCore,laserGlow,palmGlowL,palmGlowR,laserTip]) if(m){ scene.remove(m); try{ if(m.material&&m.material.dispose) m.material.dispose(); }catch(e){} }
   laserCore=laserGlow=palmGlowL=palmGlowR=laserTip=null;
   stopHum(laserHum); laserHum=null;
   abBtns[2].classList.remove('ability-active');
@@ -1473,9 +2161,268 @@ function endLaser(cool=true){
   camKick(0.06);
   if(cool) AB.laser.cd=AB.laser.cdMax;
 }
+/* ============ HUMAN TORCH ABILITIES (FLAME / NOVA / PYRO) ============
+   All three deal real combat damage via applyDamage + applyBurn (shared burn
+   status), reuse missileHitsTarget/aim/lock architecture, and respect Q(). */
+/* --- ABILITY 1: FLAME BLAST — sustained forward fire cone --- */
+function spawnFlameJet(pos, vel, color, size, dur){
+  const pm=fxSpawn(fireEmberGeo,color,true,0.9);
+  if(!pm) return;
+  pm.position.copy(pos);
+  pm.position.x+=(Math.random()-0.5)*0.25; pm.position.y+=(Math.random()-0.5)*0.2; pm.position.z+=(Math.random()-0.5)*0.25;
+  pm.scale.setScalar(size);
+  flameJets.push({m:pm, v:vel.clone(), life:0, dur});
+}
+function updateFlameJets(dt){
+  for(let i=flameJets.length-1;i>=0;i--){ const j=flameJets[i]; j.life+=dt;
+    const k=j.life/j.dur;
+    if(k>=1){ fxKill(j.m); flameJets.splice(i,1); continue; }
+    j.v.y+=dt*2.5; // flames rise naturally as they travel
+    j.v.multiplyScalar(1-dt*1.2);
+    j.m.position.addScaledVector(j.v,dt);
+    j.m.material.opacity=Math.max(0,0.9*(1-k));
+    j.m.scale.multiplyScalar(1+dt*2.2);
+  }
+}
+function startFlame(){
+  ensureAudio(); if(AB.flame.t>0) return;
+  if(AB.flame.cd>0){ SFX.empty(); return; }
+  if(!requireTorchKit()) return;
+  cancelOthers('flame');
+  const fk=activeKit().abilities.flame||KITS.torch.abilities.flame;
+  AB.flame.cdMax=fk.cd; AB.flame.dur=fk.dur||1.1;
+  AB.flame.t=AB.flame.dur; AB.flame.tick=0;
+  try{ abBtns[0].classList.add('ability-active'); }catch(e){}
+  fovPunch(1.0); SFX.flameBlast();
+  screenPulse('255,140,40',0.12,0.3);
+  camKick(0.10);
+  triggerShake(0.12,0.2);
+}
+function endFlame(restore=true){
+  if(AB.flame.t<=0){ try{ abBtns[0].classList.remove('ability-active'); }catch(e){} return; }
+  AB.flame.t=0;
+  try{ abBtns[0].classList.remove('ability-active'); }catch(e){}
+  if(restore) AB.flame.cd=AB.flame.cdMax;
+}
+function updateFlame(dt){
+  if(AB.flame.t<=0) return;
+  AB.flame.t-=dt;
+  const fk=activeKit().abilities.flame||KITS.torch.abilities.flame;
+  const L=palmWorld(playerRig.handL), R=palmWorld(playerRig.handR);
+  const origin=L.clone().add(R).multiplyScalar(0.5);
+  let dir;
+  if(Settings.aimAssist && lockedTarget && lockedTarget.alive){
+    const c=lockedTarget.rig.group.position.clone(); c.y=1.3; dir=c.sub(origin).normalize();
+  } else dir=computeAimPoint(60).sub(origin).normalize();
+  const wantYaw=Math.atan2(dir.x,dir.z);
+  let dyw=wantYaw-player.yaw; while(dyw>Math.PI)dyw-=Math.PI*2; while(dyw<-Math.PI)dyw+=Math.PI*2;
+  player.yaw+=dyw*Math.min(1,dt*10);
+  // wide detailed flame cone visuals: layered cores + embers + occasional smoke
+  const q=Q();
+  const perFrame=q===QUALITY.low?2:(q===QUALITY.medium?4:7);
+  const fwd=new THREE.Vector3(Math.sin(player.yaw),0.06,Math.cos(player.yaw));
+  for(let i=0;i<perFrame;i++){
+    const hand=i%2?L:R;
+    const spread=new THREE.Vector3((Math.random()-0.5)*3.2,(Math.random()-0.2)*1.6,(Math.random()-0.5)*3.2);
+    const v=fwd.clone().multiplyScalar(13+Math.random()*9).add(spread);
+    const col=Math.random()<0.35?0xfff2b0:(Math.random()<0.6?0xff8a2a:0xff5a00);
+    spawnFlameJet(hand,v,col,0.7+Math.random()*0.9,0.35+Math.random()*0.2);
+  }
+  if(Math.random()<q.smokeRate*0.5){
+    const sm=fxSpawn(smokeGeo,0x444444,false,0.35);
+    if(sm){ sm.position.copy(origin).addScaledVector(fwd,2.5); sm.scale.setScalar(0.8); flameJets.push({m:sm,v:fwd.clone().multiplyScalar(5).add(new THREE.Vector3(0,1.5,0)),life:0,dur:0.7}); }
+  }
+  if(Math.random()<0.5 && gate('flamewhoosh',220)) whoosh(0.25,0.10,900,2400);
+  // controlled damage ticks inside the cone (never per-frame)
+  AB.flame.tick-=dt;
+  if(AB.flame.tick<=0){
+    AB.flame.tick=fk.tick||0.12;
+    const px=player.pos.x, py=player.flyH+1.2, pz=player.pos.z;
+    const fx=Math.sin(player.yaw), fz=Math.cos(player.yaw);
+    for(const t of targets){
+      if(!t.alive) continue;
+      const tp=t.rig.group.position;
+      const dx=tp.x-px, dz=tp.z-pz, dy=1.2-py;
+      const dist=Math.sqrt(dx*dx+dy*dy+dz*dz);
+      if(dist>(fk.range||11)+0.6) continue;
+      const ang=Math.acos(THREE.MathUtils.clamp((dx*fx+dz*fz)/Math.max(0.001,Math.hypot(dx,dz)),-1,1));
+      if(Math.hypot(dx,dz)>0.6 && ang>(fk.halfAngle||0.42)) continue;
+      applyDamage(t,fk.dmg,t.rig.group.position.clone().setY(1.6),0.7,'flame');
+      applyBurn(t,{dmg:fk.burnDmg??3.6,dur:fk.burnDur??3.4});
+    }
+  }
+  if(AB.flame.t<=0) endFlame(true);
+}
+/* --- ABILITY 2: FIRE EXPLOSION (NOVA) — instant burst around the player --- */
+function startNova(){
+  ensureAudio();
+  if(AB.nova.cd>0){ SFX.empty(); return; }
+  if(!requireTorchKit()) return;
+  const nk=activeKit().abilities.nova||KITS.torch.abilities.nova;
+  AB.nova.cdMax=nk.cd;
+  const center=player.pos.clone(); center.y+=player.flyH+1.2;
+  const q=Q(), s=q.boomScale*1.15;
+  // clear-radius flash (fades fast so it never obscures the view)
+  const flash=new THREE.Mesh(new THREE.SphereGeometry(0.6*s,16,14), new THREE.MeshBasicMaterial({color:0xffd76e,transparent:true,opacity:0.9,blending:THREE.AdditiveBlending,depthWrite:false}));
+  flash.position.copy(center); scene.add(flash);
+  const n=Math.round(q.particles*1.7);
+  const parts=[];
+  for(let i=0;i<n;i++){
+    const r=Math.random();
+    const col=r<0.4?0xff5a00:(r<0.65?0xffd76e:(r<0.85?0xfff2b0:0x666666));
+    const add=r<0.85;
+    const pm=fxSpawn(r<0.85?fireEmberGeo:smokeGeo,col,add,1);
+    if(!pm) break;
+    pm.position.copy(center); pm.scale.setScalar(s*(0.8+Math.random()*0.8));
+    const th=Math.random()*Math.PI*2, ph=Math.acos(2*Math.random()-1);
+    const v=new THREE.Vector3(Math.sin(ph)*Math.cos(th),Math.abs(Math.cos(ph))*0.9+0.25,Math.sin(ph)*Math.sin(th)).normalize().multiplyScalar((6+Math.random()*10)*s);
+    parts.push({m:pm,v,life:0,dur:0.45+Math.random()*0.25});
+  }
+  let ringM=null;
+  if(Settings.quality!=='low'){ ringM=new THREE.Mesh(new THREE.RingGeometry(0.4*s,0.85*s,32), new THREE.MeshBasicMaterial({color:0xffb14d,transparent:true,opacity:0.9,side:THREE.DoubleSide,blending:THREE.AdditiveBlending,depthWrite:false})); ringM.position.copy(center); ringM.lookAt(camera.position); scene.add(ringM); }
+  explosions.push({flash,parts,ringM,life:0,dur:0.55});
+  if(q.boomLight) pulseLight(center,8);
+  // real AoE damage + ignite (3D radius around the character)
+  if(nk.dmg>0){
+    for(const t of targets){
+      if(!t.alive) continue;
+      const c=t.rig.group.position.clone(); c.y=1.2;
+      if(c.distanceTo(center)<=nk.radius+0.6){
+        applyDamage(t,nk.dmg,center.clone(),1.2,'nova');
+        applyBurn(t,{dmg:nk.burnDmg??3.8,dur:nk.burnDur??3.6});
+        t.ragdollT=Math.max(t.ragdollT,0.5);
+      }
+    }
+    damageObstacles(center,nk.radius,nk.dmg);
+    hitStop(0.07);
+    screenPulse('255,120,30',0.2,0.3);
+  }
+  AB.nova.cd=AB.nova.cdMax;
+  player.novaPose=0.55;
+  fovPunch(2.4); SFX.novaBoom();
+  triggerShake(0.35,0.25);
+  camKick(0.18);
+  hitVignetteAt(pos, 0.9);
+  try{ pressAnim(abBtns[1]); }catch(e){}
+}
+/* --- ABILITY 3: PYROKINETIC BURST — heavy explosive fire bolt --- */
+const pyroCoreGeo=new THREE.SphereGeometry(0.22,14,12);
+const pyroGlowGeo=new THREE.SphereGeometry(0.4,14,12);
+function buildPyroMesh(){
+  const g=new THREE.Group();
+  const core=new THREE.Mesh(pyroCoreGeo,new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:0.98,blending:THREE.AdditiveBlending,depthWrite:false}));
+  const glow=new THREE.Mesh(pyroGlowGeo,new THREE.MeshBasicMaterial({color:0xff5a00,transparent:true,opacity:0.8,blending:THREE.AdditiveBlending,depthWrite:false}));
+  const outer=new THREE.Mesh(new THREE.SphereGeometry(0.55,12,10),new THREE.MeshBasicMaterial({color:0xff2a00,transparent:true,opacity:0.35,blending:THREE.AdditiveBlending,depthWrite:false}));
+  g.add(outer,glow,core);
+  if(Q().flashLight){ const l=new THREE.PointLight(0xff6a1e,7,11); g.add(l); }
+  return {group:g, core, glow, outer};
+}
+function startPyro(){
+  ensureAudio();
+  if(AB.pyro.cd>0){ SFX.empty(); return; }
+  if(!requireTorchKit()) return;
+  const pk=activeKit().abilities.pyro||KITS.torch.abilities.pyro;
+  AB.pyro.cdMax=pk.cd;
+  const L=palmWorld(playerRig.handL), R=palmWorld(playerRig.handR);
+  const hand=L.clone().add(R).multiplyScalar(0.5);
+  let tgt=null, aimPoint;
+  if(Settings.aimAssist && lockedTarget && lockedTarget.alive){ tgt=lockedTarget; aimPoint=lockedTarget.rig.group.position.clone(); aimPoint.y=1.35; }
+  else aimPoint=computeAimPoint(130);
+  const dir=aimPoint.clone().sub(hand);
+  if(dir.lengthSq()<1e-6) camera.getWorldDirection(dir);
+  dir.normalize();
+  const wantYaw=Math.atan2(dir.x,dir.z);
+  let dyy=wantYaw-player.yaw; while(dyy>Math.PI)dyy-=Math.PI*2; while(dyy<-Math.PI)dyy+=Math.PI*2;
+  player.yaw+=dyy*0.75;
+  const {group, core, glow, outer}=buildPyroMesh();
+  group.position.copy(hand);
+  scene.add(group);
+  pyroShots.push({mesh:group, core, glow, outer, vel:dir.clone().multiplyScalar(pk.speed||42),
+    life:0, maxRange:100, traveled:0, target:tgt, dmg:pk.dmg||46, radius:pk.radius||3.6,
+    aoeDmg:pk.aoeDmg||24, burnDmg:pk.burnDmg??4.0, burnDur:pk.burnDur??3.8, smokeT:0, trailMeshes:[]});
+  AB.pyro.cd=AB.pyro.cdMax;
+  player.volleyPose=0.6;
+  fovPunch(1.6); SFX.pyroLaunch();
+  triggerShake(0.18,0.18); camKick(0.12);
+  screenPulse('255,150,50',0.12,0.25);
+}
+function pyroExplode(pos, direct, dmg, radius, aoeDmg, burnDmg, burnDur){
+  const q=Q(), s=q.boomScale*1.4;
+  const flash=new THREE.Mesh(new THREE.SphereGeometry(0.6*s,16,14), new THREE.MeshBasicMaterial({color:0xfff2b0,transparent:true,opacity:0.95,blending:THREE.AdditiveBlending,depthWrite:false}));
+  flash.position.copy(pos); scene.add(flash);
+  const n=Math.round(q.particles*2.0);
+  const parts=[];
+  for(let i=0;i<n;i++){
+    const r=Math.random();
+    const col=r<0.4?0xff5a00:(r<0.65?0xffd76e:(r<0.85?0xffffff:0x555555));
+    const add=r<0.85;
+    const pm=fxSpawn(r<0.85?fireEmberGeo:smokeGeo,col,add,1);
+    if(!pm) break;
+    pm.position.copy(pos); pm.scale.setScalar(s*(0.8+Math.random()*0.9));
+    const v=new THREE.Vector3((Math.random()-0.5),Math.random()*0.9+0.2,(Math.random()-0.5)).normalize().multiplyScalar((5+Math.random()*10)*s);
+    parts.push({m:pm,v,life:0,dur:0.45+Math.random()*0.3});
+  }
+  let ringM=null;
+  if(Settings.quality!=='low'){ ringM=new THREE.Mesh(new THREE.RingGeometry(0.4*s,0.9*s,32), new THREE.MeshBasicMaterial({color:0xffcf7a,transparent:true,opacity:0.95,side:THREE.DoubleSide,blending:THREE.AdditiveBlending,depthWrite:false})); ringM.position.copy(pos); ringM.lookAt(camera.position); scene.add(ringM); }
+  explosions.push({flash,parts,ringM,life:0,dur:0.6});
+  if(q.boomLight) pulseLight(pos,9);
+  if(direct && direct.alive){ applyDamage(direct,dmg,pos.clone(),1.4,'pyro'); applyBurn(direct,{dmg:burnDmg,dur:burnDur}); direct.ragdollT=Math.max(direct.ragdollT,0.6); }
+  if(aoeDmg>0||dmg>0){
+  for(const t of targets){
+    if(!t.alive || t===direct) continue;
+    const c=t.rig.group.position.clone(); c.y=1.2;
+    if(c.distanceTo(pos)<=radius+0.6){
+      applyDamage(t,aoeDmg,pos.clone(),1.0,'pyro');
+      applyBurn(t,{dmg:burnDmg,dur:burnDur});
+    }
+  }
+  }
+  damageObstacles(pos,radius,Math.max(dmg,aoeDmg));
+  hitStop(0.08);
+  screenPulse('255,140,40',0.24,0.32);
+  SFX.pyroBoom(); SFX.explosion(distVol(pos,0.9));
+  triggerShake(0.35,0.25);
+  camKick(0.18);
+  hitVignetteAt(pos, direct?0.9:0.5);
+}
+function destroyPyro(i){ const p=pyroShots[i]; freeShotGroup(p.mesh); p.trailMeshes.forEach(t=>fxKill(t.m)); pyroShots.splice(i,1); }
+function updatePyroShots(dt){
+  const q=Q();
+  const _prev=new THREE.Vector3();
+  for(let i=pyroShots.length-1;i>=0;i--){ const p=pyroShots[i];
+    if(p.target && p.target.alive && Settings.aimAssist) homingSteerDT(p,dt,5);
+    _prev.copy(p.mesh.position);
+    const step=p.vel.clone().multiplyScalar(dt);
+    p.mesh.position.add(step); p.traveled+=step.length(); p.life+=dt;
+    const fl=0.9+Math.random()*0.6;
+    p.core.scale.setScalar(fl); p.glow.scale.setScalar(1+Math.random()*0.3); p.outer.scale.setScalar(1.05-Math.random()*0.2);
+    // dense flame trail: 2 embers per step + smoke
+    for(let k=0;k<2;k++){
+      if(Math.random()<q.trailRate+0.25){
+        const em=fxSpawn(fireEmberGeo,Math.random()<0.5?0xff6a1e:0xffd24a,true,0.9);
+        if(em){ em.position.copy(p.mesh.position); em.position.x+=(Math.random()-0.5)*0.3; em.position.y+=(Math.random()-0.5)*0.3; em.position.z+=(Math.random()-0.5)*0.3; em.scale.setScalar(0.9+Math.random()*0.8); p.trailMeshes.push({m:em,life:0}); }
+      }
+    }
+    if(Math.random()<0.35){
+      const sm=fxSpawn(smokeGeo,0x555555,false,0.4);
+      if(sm){ sm.position.copy(p.mesh.position); sm.scale.setScalar(0.8); p.trailMeshes.push({m:sm,life:0}); }
+    }
+    if(p.trailMeshes.length>q.trail+10){ const old=p.trailMeshes.shift(); fxKill(old.m); }
+    for(let j=p.trailMeshes.length-1;j>=0;j--){ const tr=p.trailMeshes[j]; tr.life+=dt;
+      tr.m.material.opacity=Math.max(0,0.9-tr.life*2.0); tr.m.scale.multiplyScalar(1+dt*1.8);
+      if(tr.life>0.5){ fxKill(tr.m); p.trailMeshes.splice(j,1); } }
+    const mp=p.mesh.position;
+    const hit=missileHitsTarget(_prev,mp);
+    const hitWall=Math.abs(mp.x)>PLAY_HALF+0.4||Math.abs(mp.z)>PLAY_HALF+0.4;
+    const hitCover=!hit && pointInObstacles(mp);
+    if(hit){ pyroExplode(mp.clone(),hit,p.dmg,p.radius,p.aoeDmg,p.burnDmg,p.burnDur); destroyPyro(i); }
+    else if(hitCover){ pyroExplode(mp.clone(),null,p.aoeDmg,p.radius,p.aoeDmg,p.burnDmg,p.burnDur); destroyPyro(i); }
+    else if(!hit && (mp.y<0.12||hitWall||mp.y>40)){ pyroExplode(mp.clone(),null,0,p.radius,0,0,0); destroyPyro(i); }
+    else if(p.traveled>p.maxRange||p.life>4){ pyroExplode(mp.clone(),null,0,p.radius,0,0,0); destroyPyro(i); }
+  }
+}
 // --- ABILITY 4: flight ---
-const thrustGeo=new THREE.ConeGeometry(0.11,0.55,8);
-function thrustPuff(pos,color=0x9fe8ff){
+const thrustGeo=new THREE.ConeGeometry(0.11,0.55,8);function thrustPuff(pos,color=0x9fe8ff){
   const q=Q();
   if(Math.random()>q.thrustRate) return;
   const pm=fxSpawn(smokeGeo,color,true,0.75);
@@ -1488,15 +2435,18 @@ let flyLight=null;
 function startFlight(){
   ensureAudio(); if(player.flying) return;
   if(AB.fly.cd>0){ SFX.empty(); return; }
-  if(!requireIronman()) return;
+  if(!requireHero()) return;
   cancelOthers('fly');
   const fk=activeKit().abilities.fly; AB.fly.cdMax=fk.cd; AB.fly.durMax=fk.dur;
   player.flying=true; AB.fly.t=AB.fly.durMax;
-  if(!flyLight){ flyLight=new THREE.PointLight(0x9fe8ff,4,9); scene.add(flyLight); }
+  const isTorch=Settings.character==='torch';
+  const lc=isTorch?0xff7a1e:0x9fe8ff;
+  if(!flyLight){ flyLight=new THREE.PointLight(lc,4,9); scene.add(flyLight); }
+  else flyLight.color.setHex(lc);
   flightHum=startHum('flight');
   document.getElementById('fly-alt').classList.add('show');
   abBtns[3].classList.add('ability-active');
-  SFX.flightOn(); triggerShake(0.15,0.2); camKick(0.12);
+  SFX.flightOn(); triggerShake(0.15,0.2); camKick(0.12); fovPunch(1.8);
   screenPulse('170,255,190',0.10,0.4); // subtle launch response
 }
 function endFlight(cool=true){
@@ -1526,7 +2476,10 @@ function updateFlight(dt){
     const right=new THREE.Vector3(-fwd.z,0,fwd.x);
     _move.addScaledVector(fwd,-jy).addScaledVector(right,jx);
     if(_move.lengthSq()>1) _move.normalize();
-    _move.multiplyScalar(activeKit().abilities.fly.speed);
+    // Focused-pressure tradeoff: lasing while flying keeps full steering but
+    // bleeds translation speed so hover aiming stays precise.
+    const airLasing=(AB.laser&&AB.laser.holding)?0.55:1;
+    _move.multiplyScalar(activeKit().abilities.fly.speed*airLasing);
   }
   player.fvel.x=THREE.MathUtils.damp(player.fvel.x,_move.x,8,dt);
   player.fvel.z=THREE.MathUtils.damp(player.fvel.z,_move.z,8,dt);
@@ -1546,18 +2499,28 @@ function updateFlight(dt){
     player.yaw+=dd*Math.min(1,dt*6);
   }
   clampToArena(player.pos);
-  collideObstacles(player.pos,player.flyH);
+  // airborne: no step-up (vertical clearance rules below decide contact)
+  collideObstacles(player.pos,player.flyH,false);
   // altitude: buttons (mobile) + E/Q (desktop), damped for stable hover
   const climb=((flyUpHeld||keys.e)?1:0)-((flyDownHeld||keys.q)?1:0);
   player.flyV=THREE.MathUtils.damp(player.flyV,climb*6,8,dt);
-  player.flyH=THREE.MathUtils.clamp(player.flyH+player.flyV*dt,0,FLY_MAX_H);
+  // never sink into a standable top while airborne — hover rests on platforms
+  const floorUnder=groundHeightAt(player.pos.x,player.pos.z);
+  player.flyH=THREE.MathUtils.clamp(player.flyH+player.flyV*dt,Math.max(0,floorUnder),FLY_MAX_H);
   if(player.flyH>=FLY_MAX_H-0.01 && player.flyV>0) player.flyV=0; // ceiling holds, no jitter
   if(flightHum){ try{ flightHum.o.frequency.value=58+player.flyV*2.2; }catch(e){} } // thrusters track climb
-  // propulsion from both hands + both feet, synced to flight
-  thrustPuff(palmWorld(playerRig.handL)); thrustPuff(palmWorld(playerRig.handR));
+  // propulsion from both hands + both feet, synced to flight.
+  // IRONMAN: cool repulsor blue hands + warm feet. TORCH: full fire propulsion.
+  const torchFly=Settings.character==='torch';
+  thrustPuff(palmWorld(playerRig.handL),torchFly?0xff7a1e:0x9fe8ff); thrustPuff(palmWorld(playerRig.handR),torchFly?0xff8a2a:0x9fe8ff);
   const fl=new THREE.Vector3(), fr=new THREE.Vector3();
   playerRig.legL.ft.getWorldPosition(fl); playerRig.legR.ft.getWorldPosition(fr);
-  thrustPuff(fl,0xffc46e); thrustPuff(fr,0xffc46e);
+  thrustPuff(fl,torchFly?0xff5a00:0xffc46e); thrustPuff(fr,torchFly?0xffd24a:0xffc46e);
+  // torch flight sheds extra embers for a convincing fire-propulsion read
+  if(torchFly && Math.random()<Q().thrustRate){
+    const em=fxSpawn(fireEmberGeo,0xff8a2a,true,0.85);
+    if(em){ em.position.copy(player.pos); em.position.y+=player.flyH+0.6; em.scale.setScalar(0.8); explosions.push({flash:em,parts:[],ringM:null,life:0,dur:0.3}); }
+  }
   if(flyLight){ flyLight.position.copy(player.pos); flyLight.position.y+=player.flyH+1.2; }
 }
 
@@ -1587,10 +2550,19 @@ function updateCooldownUI(dt){
   AB.volley.cd=Math.max(0,AB.volley.cd-dt);
   AB.laser.cd=Math.max(0,AB.laser.cd-dt);
   AB.fly.cd=Math.max(0,AB.fly.cd-dt);
-  renderCd(abBtns[0],AB.spin.cd,AB.spin.cdMax,AB.spin.t>0?AB.spin.t.toFixed(1)+'s':null);
-  renderCd(abBtns[1],AB.volley.cd,AB.volley.cdMax);
-  renderCd(abBtns[2],AB.laser.cd,AB.laser.cdMax,AB.laser.holding?AB.laser.t.toFixed(1)+'s':null);
-  renderCd(abBtns[3],AB.fly.cd,AB.fly.cdMax,player.flying?'FLY':null);
+  AB.flame.cd=Math.max(0,AB.flame.cd-dt);
+  AB.nova.cd=Math.max(0,AB.nova.cd-dt);
+  AB.pyro.cd=Math.max(0,AB.pyro.cd-dt);
+  if(Settings.character==='torch'){
+    renderCd(abBtns[0],AB.flame.cd,AB.flame.cdMax,AB.flame.t>0?AB.flame.t.toFixed(1)+'s':null);
+    renderCd(abBtns[1],AB.nova.cd,AB.nova.cdMax);
+    renderCd(abBtns[2],AB.pyro.cd,AB.pyro.cdMax);
+  } else {
+    renderCd(abBtns[0],AB.spin.cd,AB.spin.cdMax,AB.spin.t>0?AB.spin.t.toFixed(1)+'s':null);
+    renderCd(abBtns[1],AB.volley.cd,AB.volley.cdMax);
+    renderCd(abBtns[2],AB.laser.cd,AB.laser.cdMax,AB.laser.holding?AB.laser.t.toFixed(1)+'s':null);
+  }
+  renderCd(abBtns[3],AB.fly.cd,AB.fly.cdMax,player.flying?Math.ceil(AB.fly.t)+'s':null);
   // combo stage pips: highlight the NEXT stage to fire (3rd pip enlarged = finisher)
   const pips=atkBtn.querySelectorAll('.pips i');
   for(let i=0;i<pips.length;i++){
@@ -1611,14 +2583,13 @@ function renderCd(btn,t,total,activeText){
     }
   }
 }
-const explosions=[];
 function releaseShot(){
-  // IRONMAN 3-stage missile combo, fired at the end of anticipation.
-  // Stages 1+2 identical; stage 3 modest boost + larger blast + brief ragdoll.
-  // Fires while moving / flying: yaw eases toward the shot (no snap) so the
-  // strafe-facing controller keeps body movement coherent.
+  // HERO-AWARE BASIC ATTACK: ironman fires the 3-stage missile combo, torch
+  // launches fast hand fireballs. Both fire while moving/flying with eased yaw.
   const stage=player.combo;
-  const hand=handWorldPos();
+  const isTorch=Settings.character==='torch';
+  const hand=isTorch?(player.fireHand?handWorldPos():palmWorld(playerRig.handL)):handWorldPos();
+  if(isTorch) player.fireHand=!player.fireHand;
   let tgt=null, aimPoint;
   if(Settings.aimAssist && lockedTarget && lockedTarget.alive){ tgt=lockedTarget; aimPoint=lockedTarget.rig.group.position.clone(); aimPoint.y=1.35; }
   else { aimPoint=computeAimPoint(130); }
@@ -1628,14 +2599,30 @@ function releaseShot(){
   const wantYaw=Math.atan2(dir.x,dir.z);
   let dy=wantYaw-player.yaw; while(dy>Math.PI)dy-=Math.PI*2; while(dy<-Math.PI)dy+=Math.PI*2;
   player.yaw+=dy*0.75; // fast ease — responsive without teleporting the body
+  const kit=activeKit();
+  if(isTorch){
+    // FIREBALL: alternating hands, muzzle flash, aerial fire boost
+    spawnPalmBurst(hand.clone().addScaledVector(dir,0.3),0xff8a2a);
+    const airborne=player.flyH>1;
+    const boost=airborne?(kit.synergy.airFireBoost||1.15):1;
+    fireFireball(dir,tgt,hand,{dmg:kit.combo.dmg[stage], radius:kit.combo.radius[stage], big:stage===2,
+      speed:46*boost, burnDmg:3.6, burnDur:3.4});
+    camKick(stage===2?0.12:0.05);
+    if(stage===2) pokePlayer(1);
+  } else {
+  // IRONMAN 3-stage missile combo, fired at the end of anticipation.
+  // Stages 1+2 identical; stage 3 modest boost + larger blast + brief ragdoll.
+  // Fires while moving / flying: yaw eases toward the shot (no snap) so the
+  // strafe-facing controller keeps body movement coherent.
   spawnPalmBurst(hand.clone().addScaledVector(dir,0.35),0xffc46e); // muzzle flash at launch
   // SYNERGY aerial superiority: firing while airborne trades altitude for missile speed + agility
   const airborne=player.flyH>1;
-  const kit=activeKit();
   fireMissile(dir,tgt,hand,{dmg:kit.combo.dmg[stage], radius:kit.combo.radius[stage], big:stage===2,
     speed:34*(airborne?kit.synergy.airMissileBoost:1), agile:airborne});
+  fovPunch(stage===2?2.0:0.7); // FOV punch scales with combo stage weight
   camKick(stage===2?0.12:0.05); // launch impulse scales with stage
   if(stage===2) pokePlayer(1); // stage-3 blast kick: brief believable recoil, auto-recovers
+  }
   player.combo=(stage+1)%3; player.comboIdle=0; // reliable advance, wraps after stage 3
 }
 function tryAttack(){
@@ -1650,17 +2637,23 @@ function tryAttack(){
 }
 atkBtn.addEventListener('pointerdown',e=>{ e.preventDefault(); tryAttack(); });
 bindPress(atkBtn);
-// 1 Repulsor Spin · 2 Six Missiles · 3 Dual Laser (hold) · 4 Flight (toggle)
+// HERO-AWARE ability dispatch: ironman SPIN/VOLLEY/BEAM/FLY, torch BLAST/NOVA/PYRO/FLY
 abBtns.forEach(bindPress);
-abBtns[0].addEventListener('pointerdown',e=>{ e.preventDefault(); ensureAudio(); SFX.ui(); pressAnim(abBtns[0]); startSpin(); });
-abBtns[1].addEventListener('pointerdown',e=>{ e.preventDefault(); ensureAudio(); SFX.ui(); pressAnim(abBtns[1]); startVolley(); });
-abBtns[2].addEventListener('pointerdown',e=>{ e.preventDefault(); ensureAudio(); pressAnim(abBtns[2]); AB.laser.holding?endLaser(true):startLaser(); }); // toggle: stays on until pressed again or duration ends
+abBtns[0].addEventListener('pointerdown',e=>{ e.preventDefault(); ensureAudio(); SFX.ui(); pressAnim(abBtns[0]); if(Settings.character==='torch') startFlame(); else startSpin(); });
+abBtns[1].addEventListener('pointerdown',e=>{ e.preventDefault(); ensureAudio(); SFX.ui(); pressAnim(abBtns[1]); if(Settings.character==='torch') startNova(); else startVolley(); });
+abBtns[2].addEventListener('pointerdown',e=>{ e.preventDefault(); ensureAudio(); if(Settings.character==='torch'){ SFX.ui(); pressAnim(abBtns[2]); startPyro(); } else { pressAnim(abBtns[2]); AB.laser.holding?endLaser(true):startLaser(); } }); // torch PYRO instant; laser toggle
 abBtns[3].addEventListener('pointerdown',e=>{ e.preventDefault(); ensureAudio(); SFX.ui(); pressAnim(abBtns[3]); player.flying?endFlight(true):startFlight(); });
 const flyUpBtn=document.getElementById('fly-up'), flyDownBtn=document.getElementById('fly-down');
-flyUpBtn.addEventListener('pointerdown',e=>{ e.preventDefault(); flyUpHeld=true; });
-flyDownBtn.addEventListener('pointerdown',e=>{ e.preventDefault(); flyDownHeld=true; });
-addEventListener('pointerup',()=>{ flyUpHeld=false; flyDownHeld=false; });
-addEventListener('pointercancel',()=>{ flyUpHeld=false; flyDownHeld=false; });
+function bindHold(btn,set){
+  btn.addEventListener('pointerdown',e=>{ e.preventDefault(); ensureAudio(); try{btn.setPointerCapture(e.pointerId);}catch(err){} set(true); });
+  const rel=e=>{ try{ if(e&&e.pointerId!==undefined&&btn.hasPointerCapture&&btn.hasPointerCapture(e.pointerId)) btn.releasePointerCapture(e.pointerId); }catch(err){} set(false); };
+  btn.addEventListener('pointerup',rel);
+  btn.addEventListener('pointercancel',()=>set(false));
+  btn.addEventListener('lostpointercapture',()=>set(false));
+  btn.addEventListener('contextmenu',e=>e.preventDefault());
+}
+bindHold(flyUpBtn,v=>flyUpHeld=v);
+bindHold(flyDownBtn,v=>flyDownHeld=v);
 
 /* ============ AIM ASSIST ============ */
 let lockedTarget=null;
@@ -1759,8 +2752,6 @@ function solveLeg(r,leg,tx,tk,tf,dt){
   dampAxis(leg.ft,'x',r.caps.knees?tf:tx*0.4,14,dt);
 }
 function pokePlayer(s=1){ player.recoil=Math.min(1,player.recoil+s); } // hit-reaction impulse
-const _mvF=new THREE.Vector3(), _mvR=new THREE.Vector3(), _move=new THREE.Vector3();
-const _footL=new THREE.Vector3(), _footR=new THREE.Vector3();
 /* ============ PLAYER ANIMATION CONTROLLER ============
    Split responsibilities:
      • updatePlayerPhysics  — gravity / jump / landing (vertical sim)
@@ -1795,7 +2786,16 @@ function groundControl(dt){
   player.vel.z=THREE.MathUtils.damp(player.vel.z,_move.z,accel,dt);
   player.pos.addScaledVector(player.vel,dt);
   clampToArena(player.pos,1.5);
-  collideObstacles(player.pos,player.flyH);
+  // STEP-UP: walking into a low platform/crate puts the player on top of it
+  const stepH=collideObstacles(player.pos,player.flyH,true);
+  if(stepH && player.grounded && !player.flying) player.flyH=stepH;
+  // walked off a platform edge: leave the ground cleanly (coyote covers the step)
+  if(player.grounded){
+    const gUnder=groundHeightAt(player.pos.x,player.pos.z);
+    if(player.flyH-gUnder>0.35){
+      player.grounded=false; player.vy=0; player.airT=0; player.coyoteT=0.12;
+    } else player.flyH=gUnder;
+  }
   const spd=player.vel.length();
   // STRAFE AIM-FACING (Marvel-Rivals feel): while firing the beam, mid-attack,
   // or strafing with a live lock, face the aim — never the movement direction.
@@ -1843,6 +2843,9 @@ function animatePlayer(dt,time){
   const kmv=(keys.w||keys.a||keys.s||keys.d)?1:0;
   player.moving=mv>0.15||kmv>0;
   const spinning=AB.spin.t>0, lasing=AB.laser.holding;
+  const flaming=(typeof AB!=='undefined'&&AB.flame&&AB.flame.t>0);
+  const torchHero=Settings.character==='torch';
+  if(player.novaPose>0) player.novaPose=Math.max(0,player.novaPose-dt);
   if(!spinning && player.spinAngle!==0){ // unwind spin offset after spin ends (never stuck twisted)
     const twoPi=Math.PI*2;
     player.spinAngle=THREE.MathUtils.damp(player.spinAngle,Math.round(player.spinAngle/twoPi)*twoPi,8,dt);
@@ -1851,7 +2854,9 @@ function animatePlayer(dt,time){
   if(player.flying) groundFlightControl(dt); else groundControl(dt);
   r.group.position.copy(player.pos);
   r.group.rotation.set(0,player.yaw+player.spinAngle,0);
-  playerBlob.position.set(player.pos.x,0.02,player.pos.z);
+  // blob sits on the actual footing (platform top when standing on one), fades with air height
+  const footGround=player.grounded?player.flyH:groundHeightAt(player.pos.x,player.pos.z);
+  playerBlob.position.set(player.pos.x,footGround+0.02,player.pos.z);
   // blob shrinks/fades with altitude
   const blobS=1+player.flyH*0.04;
   playerBlob.scale.set(blobS,blobS,1);
@@ -1867,8 +2872,11 @@ function animatePlayer(dt,time){
   player.wLaser=THREE.MathUtils.damp(player.wLaser||0, lasing?1:0, 14, dt);
   player.wFly=THREE.MathUtils.damp(player.wFly||0, player.flying?1:0, 9, dt);
   player.wVolley=THREE.MathUtils.damp(player.wVolley||0, player.volleyPose>0?1:0, 16, dt);
+  player.wFlame=THREE.MathUtils.damp(player.wFlame||0, flaming?1:0, 14, dt);
+  player.wNova=THREE.MathUtils.damp(player.wNova||0, (player.novaPose||0)>0?1:0, 12, dt);
   const wStride=player.wStride, wAir=player.wAir, wLand=player.wLand;
   const wSpin=player.wSpin, wLaser=player.wLaser, wFly=player.wFly, wVolley=player.wVolley;
+  const wFlame=player.wFlame||0, wNova=player.wNova||0;
 
   // ---- attack timeline (anticipation -> release -> recover) ----
   let wind=0, thrust=0;
@@ -1925,7 +2933,9 @@ function animatePlayer(dt,time){
   // spine / head — flight lean overrides aim lean; recoil adds a brief kick
   const lean=(player.moving?0.07:-0.01+breath*0.012)*wStride;
   const climbLean=wFly>0.1?THREE.MathUtils.clamp(player.flyV*0.03,-0.12,0.2):0;
-  const spineXT=(lean+aimSpine*0.5)*(1-wFly)-player.recoil*0.20-0.08*wSpin+0.12*Math.sin(player.volleyPose>0?(0.6-player.volleyPose)/0.6*Math.PI:0)+climbLean+0.06*wAir+0.35*landSquat;
+  const torchFlyLean=(torchHero&&wFly>0.1)?0.22*wFly:0; // torch fire-flight: body drives forward
+  const flameLean=wFlame*0.18+wNova*0.1;
+  const spineXT=(lean+aimSpine*0.5)*(1-wFly)-player.recoil*0.20-0.08*wSpin+0.12*Math.sin(player.volleyPose>0?(0.6-player.volleyPose)/0.6*Math.PI:0)+climbLean+torchFlyLean+flameLean+0.06*wAir+0.35*landSquat;
   dampAxis(r.spine,'x',spineXT,10,dt);
   dampAxis(r.spine,'y',-0.28*wind+0.32*thrust+(swing*0.16*wStride),12,dt);
   dampAxis(r.spine,'z',THREE.MathUtils.clamp(-strafeLean*0.4-(player.turnVel||0)*0.15,-0.3,0.3),8,dt); // bank + sway
@@ -1940,18 +2950,21 @@ function animatePlayer(dt,time){
   // per-layer arm targets, then weighted blend (no layer ever fights another)
   const spinSh=-1.5, spinZ=1.1, spinEl=-0.25;
   const lasSh=castArm-0.15, lasZ=0.35, lasEl=-0.15;
-  const flySh=0.9, flyZ=0.35, flyEl=-0.15;
+  const flySh=torchHero?1.15:0.9, flyZ=0.35, flyEl=-0.15;
+  const flameSh=castArm-0.25, flameZ=0.3, flameEl=-0.2;
+  const novaSh=-1.2, novaZ=1.2, novaEl=-0.3;
   const airShX=THREE.MathUtils.clamp(-0.5+0.7*jumpRise,-1.1,0.9), airShZ=0.5, airEl=-0.2;
   const groundShX=castArm, groundShZ=-0.12, groundEl=castEl;
   const launchLift=wVolley>0.05?-0.9*wVolley:0;
-  const armR_shX=(spinSh*wSpin+lasSh*wLaser+flySh*wFly+airShX*wAir+groundShX*(1-wSpin-wLaser-wFly-wAir)+launchLift);
-  const armR_shZ=(spinZ*wSpin-lasZ*wLaser-flyZ*wFly+airShZ*wAir+groundShZ*(1-wSpin-wLaser-wFly-wAir));
-  const armR_el=(spinEl*wSpin+lasEl*wLaser+flyEl*wFly+airEl*wAir+groundEl*(1-wSpin-wLaser-wFly-wAir));
+  const wBase=Math.max(0,1-wSpin-wLaser-wFly-wAir-wFlame-wNova);
+  const armR_shX=(spinSh*wSpin+lasSh*wLaser+flySh*wFly+airShX*wAir+flameSh*wFlame+novaSh*wNova+groundShX*wBase+launchLift);
+  const armR_shZ=(spinZ*wSpin-lasZ*wLaser-flyZ*wFly+airShZ*wAir+flameZ*wFlame+novaZ*wNova+groundShZ*wBase);
+  const armR_el=(spinEl*wSpin+lasEl*wLaser+flyEl*wFly+airEl*wAir+flameEl*wFlame+novaEl*wNova+groundEl*wBase);
   solveArm(r,r.armR,armR_shX,armR_shZ,armR_el,dt);
   // support arm mirrors (spread out in spin/air, forward in laser, back in flight)
-  const sup_shX=(spinSh*wSpin+lasSh*wLaser+flySh*wFly+(airShX+0.1)*wAir+(supArm+0.20*thrust)*(1-wSpin-wLaser-wFly-wAir)+launchLift*0.6);
-  const sup_shZ=(-spinZ*wSpin+lasZ*wLaser-flyZ*wFly+airShZ*wAir+0.12*(1-wSpin-wLaser-wFly-wAir));
-  const sup_el=(spinEl*wSpin+lasEl*wLaser+flyEl*wFly+airEl*wAir-0.40*(1-wSpin-wLaser-wFly-wAir));
+  const sup_shX=(spinSh*wSpin+lasSh*wLaser+flySh*wFly+(airShX+0.1)*wAir+flameSh*wFlame+novaSh*wNova+(supArm+0.20*thrust)*wBase+launchLift*0.6);
+  const sup_shZ=(-spinZ*wSpin+lasZ*wLaser-flyZ*wFly+airShZ*wAir+flameZ*wFlame-novaZ*wNova+0.12*wBase);
+  const sup_el=(spinEl*wSpin+lasEl*wLaser+flyEl*wFly+airEl*wAir+flameEl*wFlame+novaEl*wNova-0.40*wBase);
   solveArm(r,r.armL,sup_shX,sup_shZ,sup_el,dt);
 
   // ---- FOOT PLANTING: root-height compensation so the lower foot never
@@ -1971,11 +2984,14 @@ function animatePlayer(dt,time){
     r.group.position.y=player.flyH; // R6: block legs carry fixed offsets
   }
 }
-let footFixY=0;
-function idleBob0(b){ return b*0.022; }
 function animateTargets(dt,time){
   for(const t of targets){
     const g=t.rig.group;
+    // track world velocity (feeds predictive homing lead + reaction rules)
+    if(!t.vel) t.vel=new THREE.Vector3();
+    if(!t._lp) t._lp=g.position.clone();
+    else if(dt>1e-4) t.vel.copy(g.position).sub(t._lp).multiplyScalar(1/dt);
+    t._lp.copy(g.position);
     // blob shadow follows x/z, stays flat on the ground
     t.blob.position.set(g.position.x,0.02,g.position.z);
     // hide blob while fallen, fade back on respawn
@@ -2000,6 +3016,13 @@ function animateTargets(dt,time){
     t.rig.armL.sh.rotation.x=Math.sin(time*1.8+g.position.z)*0.07;
     t.rig.armR.sh.rotation.x=-Math.sin(time*1.8+g.position.z)*0.07;
     t.rig.armL.el.rotation.x=-0.35; t.rig.armR.el.rotation.x=-0.35;
+    // clash-specialist marker: gentle bob + spin, visible only while alive
+    try{
+      if(t.clashMarker){
+        t.clashMarker.visible=(t.alive&&t.canClash===true);
+        if(t.clashMarker.visible){ t.clashMarker.position.y=3.05+Math.sin(time*2.4+t.uid)*0.12; t.clashMarker.rotation.y+=dt*2.2; }
+      }
+    }catch(e){}
     // hit flash decay, fully reset emissive at the end
     if(t.flash>0){
       t.flash=Math.max(0,t.flash-dt*4);
@@ -2017,8 +3040,16 @@ function animateTargets(dt,time){
 
 /* ============ CAMERA (free-look + floor/wall collision) ============ */
 let smoothCamDist=6.2;
-const _camDir=new THREE.Vector3(), _camWant=new THREE.Vector3(), _camPivot=new THREE.Vector3(), _camHit=new THREE.Vector3();
+const _camDir=new THREE.Vector3(), _camWant=new THREE.Vector3(), _camPivot=new THREE.Vector3(), _camFinal=new THREE.Vector3();
 const _camRay=new THREE.Raycaster();
+/* SPRING FOLLOW: the camera lags the character slightly (Marvel Rivals weight).
+   Instant follow reads stiff on mobile; a damped x/z position makes strafes
+   readable without ever changing the aim — the pivot and rotation stay exact,
+   only the eye position trails, and occlusion snaps back to prevent clipping. */
+const camLag=new THREE.Vector3();
+const CAM_LAG_XZ=15, CAM_LAG_Y=20, FOV_BASE=62;
+let fovKick=0;
+function fovPunch(amt){ if(!Settings.shake||Settings.quality==='low') return; fovKick=Math.min(5,fovKick+amt); }
 function updateCamera(dt){
   const px=player.pos.x, py=1.7+player.flyH, pz=player.pos.z;
   // AERIAL FRAMING: rise + pull back slightly with altitude so dives, hover
@@ -2045,7 +3076,17 @@ function updateCamera(dt){
   }
   blockedDist=Math.max(1.4,Math.min(wantDist,blockedDist));
   smoothCamDist=THREE.MathUtils.damp(smoothCamDist,blockedDist,10,dt);
-  camera.position.copy(_camPivot).addScaledVector(_camDir,smoothCamDist);
+  _camFinal.copy(_camPivot).addScaledVector(_camDir,smoothCamDist);
+  // spring follow: when something occludes we snap (never clip), otherwise lag
+  const occluded=blockedDist<wantDist-0.06;
+  if(!camLag._init){ camLag.copy(_camFinal); camLag._init=true; }
+  if(occluded) camLag.copy(_camFinal);
+  else{
+    camLag.x=THREE.MathUtils.damp(camLag.x,_camFinal.x,CAM_LAG_XZ,dt);
+    camLag.z=THREE.MathUtils.damp(camLag.z,_camFinal.z,CAM_LAG_XZ,dt);
+    camLag.y=THREE.MathUtils.damp(camLag.y,_camFinal.y,CAM_LAG_Y,dt);
+  }
+  camera.position.copy(camLag);
   if(camera.position.y<0.4) camera.position.y=0.4;
   // combat feedback offsets (shake + directional kick), applied post-collision
   let sx=0,sy=0;
@@ -2057,6 +3098,11 @@ function updateCamera(dt){
   // hard safety: combat offsets can never leave the valid camera volume
   camera.position.x=THREE.MathUtils.clamp(camera.position.x,-ARENA/2-1,ARENA/2+1);
   camera.position.z=THREE.MathUtils.clamp(camera.position.z,-ARENA/2-1,ARENA/2+1);
+  // FOV punch: momentary widening sells heavy attacks (decays fast, never
+  // touches aim because lookAt rotation is unaffected). Gated by shake setting.
+  const fov=FOV_BASE+fovKick;
+  if(Math.abs(camera.fov-fov)>0.01){ camera.fov=fov; camera.updateProjectionMatrix(); }
+  fovKick*=Math.exp(-8*dt); if(fovKick<0.01) fovKick=0;
   camera.lookAt(_camPivot);
 }
 
@@ -2082,22 +3128,15 @@ document.querySelectorAll('.qbtns button').forEach(b=>b.onclick=()=>{ Settings.q
 document.querySelectorAll('.seg.aimseg button').forEach(b=>b.onclick=()=>{ Settings.aimingMode=b.dataset.aim; document.querySelectorAll('.seg.aimseg button').forEach(x=>x.classList.toggle('active',x===b)); layoutReticle(); SFX.ui(); });
 document.querySelectorAll('.seg.rigseg button').forEach(b=>b.onclick=()=>{ setRigType(b.dataset.rig); });
 document.querySelectorAll('.seg.rigseg button').forEach(x=>x.classList.toggle('active',x.dataset.rig===Settings.rigType));
-function updateCombatDisabled(){ // abilities need IRONMAN; attack always live
-  const dis=Settings.character!=='ironman';
+function updateCombatDisabled(){ // abilities need a selected hero; attack always live
+  const dis=(Settings.character!=='ironman'&&Settings.character!=='torch');
   abBtns.forEach(b=>b.classList.toggle('disabled',dis));
 }
-function openCharPanel(open){ const p=document.getElementById('char-panel'); if(open===undefined) p.classList.toggle('open'); else p.classList.toggle('open',!!open); }
-$('char-btn').onclick=()=>{ ensureAudio(); SFX.ui(); const p=$('char-panel'); p.classList.toggle('open'); };
-$('char-select').onclick=()=>{
-  ensureAudio(); SFX.ui();
-  Settings.character='ironman';
-  respawnPlayer(); // safe respawn, same rig, camera + controls untouched
-  updateCombatDisabled();
-  $('char-select').textContent='✓ IRONMAN ACTIVE';
-  $('char-select').classList.add('selected');
-  $('char-panel').classList.remove('open');
-  toast('IRONMAN READY');
-};
+function openCharPanel(open){ const p=document.getElementById('char-panel'); if(open===undefined) p.classList.toggle('open'); else p.classList.toggle('open',!!open); if(p.classList.contains('open')) renderCharPreview(); }
+$('char-btn').onclick=()=>{ ensureAudio(); SFX.ui(); const p=$('char-panel'); p.classList.toggle('open'); if(p.classList.contains('open')) renderCharPreview(); };
+$('char-select').onclick=()=>{ selectCharacter(HEROES[charPreviewIdx].id); };
+$('char-prev').onclick=()=>{ ensureAudio(); SFX.ui(); charPreviewIdx=(charPreviewIdx+HEROES.length-1)%HEROES.length; renderCharPreview(); };
+$('char-next').onclick=()=>{ ensureAudio(); SFX.ui(); charPreviewIdx=(charPreviewIdx+1)%HEROES.length; renderCharPreview(); };
 function goFullscreen(){ ensureAudio(); const el=document.documentElement; try{ if(el.requestFullscreen) el.requestFullscreen(); }catch(e){} try{ if(screen.orientation&&screen.orientation.lock) screen.orientation.lock('landscape').catch(()=>{}); }catch(e){} }
 $('fs-btn').onclick=goFullscreen;
 document.getElementById('fs-btn2').onclick=goFullscreen;
@@ -2106,9 +3145,16 @@ addEventListener('contextmenu',e=>e.preventDefault());
 document.addEventListener('dblclick',e=>e.preventDefault());
 
 /* ============ MAIN LOOP ============ */
+markSharedGeo(projGeo,mslBodyGeo,mslNoseGeo,mslFlameGeo,smokeGeo,fireEmberGeo,
+  fireCoreGeo,fireGlowGeo,beamGeoUnit,pyroCoreGeo,pyroGlowGeo,
+  clashCoreGeo,clashGlowGeo,clashHeatGeo,clashTipGeo,clashRingGeo,thrustGeo);
+markSharedMat(mslBodyMat,mslNoseMat,mslFlameMat);
 applyQuality();
 layoutReticle();
 updateCombatDisabled();
+try{ refreshAbilityUI(); }catch(e){}
+try{ renderCharPreview(); }catch(e){}
+try{ applyCharacterTint(); }catch(e){}
 setVolume(Settings.volume);
 const clock=new THREE.Clock();
 function loop(){
@@ -2135,10 +3181,19 @@ function loop(){
   updateVolley(wdt);
   updateSpin(wdt);
   updateLaser(wdt);
+  // Beam-clash safety net: if the player beam died without updateLaser running
+  // (respawn / rig swap / cancel race), resolve the clash here so no enemy beam
+  // or particle ever lingers. Also ticks the re-arm cooldown while idle.
+  try{ if(!AB.laser.holding && typeof updateBeamClash==='function') updateBeamClash(wdt); }catch(e){}
   updateFlight(wdt);
+  updateFireballs(wdt);
+  updatePyroShots(wdt);
+  updateFlame(wdt);
+  updateFlameJets(wdt);
   if(player.landing && !player.flying){ // touchdown glide after flight ends
-    player.flyH=THREE.MathUtils.damp(player.flyH,0,6,wdt);
-    if(player.flyH<0.05){ player.flyH=0; player.landing=false; SFX.touchdown(); camKick(0.08); }
+    const landGround=groundHeightAt(player.pos.x,player.pos.z);
+    player.flyH=THREE.MathUtils.damp(player.flyH,landGround,6,wdt);
+    if(player.flyH<landGround+0.05){ player.flyH=landGround; player.landing=false; player.grounded=true; player.vy=0; player.landT=0.3; SFX.touchdown(); camKick(0.08); }
   }
   updateBeams(wdt);
   if(boomLightT>0){ boomLightT-=wdt; if(boomLightT<=0) boomLight.intensity=0; }
