@@ -1,0 +1,2154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Stickman Rivals — 3D Combat Prototype</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none}
+  html,body{width:100%;height:100%;overflow:hidden;background:#9fd0ef;font-family:'Segoe UI',system-ui,-apple-system,Roboto,Arial,sans-serif;touch-action:none;overscroll-behavior:none}
+  #game-canvas{position:fixed;inset:0;display:block}
+  /* Rotate hint */
+  #rotate-hint{display:none;position:fixed;inset:0;z-index:200;background:rgba(10,15,25,.92);color:#fff;align-items:center;justify-content:center;flex-direction:column;gap:12px;font-size:18px;text-align:center;padding:20px}
+  @media (orientation:portrait) and (max-width:700px){
+    #rotate-hint{display:flex}
+  }
+  /* Reticle — single minimal white dot (position set by aiming mode) */
+  #reticle{position:fixed;left:58%;top:50%;transform:translate(-50%,-50%);pointer-events:none;z-index:20}
+  #aim-dot{width:8px;height:8px;background:#fff;border-radius:50%;box-shadow:0 0 0 1px rgba(0,0,0,.55),0 0 5px rgba(0,0,0,.5);transition:transform .08s ease,background .08s ease}
+  #reticle.hit #aim-dot{transform:scale(2.1);background:#ffd23f}
+  /* Hitmarker — brief X flash at the reticle on confirmed hits (never blocks view) */
+  #hitmarker{position:fixed;left:58%;top:50%;transform:translate(-50%,-50%);pointer-events:none;z-index:20;opacity:0;width:26px;height:26px}
+  #hitmarker i{position:absolute;left:50%;top:50%;width:9px;height:2px;background:#fff;box-shadow:0 0 4px rgba(0,0,0,.8)}
+  #hitmarker i:nth-child(1){transform:translate(-130%,-130%) rotate(45deg)}
+  #hitmarker i:nth-child(2){transform:translate(30%,-130%) rotate(-45deg)}
+  #hitmarker i:nth-child(3){transform:translate(-130%,30%) rotate(-45deg)}
+  #hitmarker i:nth-child(4){transform:translate(30%,30%) rotate(45deg)}
+  #hitmarker.show{opacity:1}
+  #hitmarker.kill i{background:#ff5252;height:3px}
+  /* Aim lock marker — four clean white corners only, no center dot */
+  #lock-marker{position:fixed;left:0;top:0;width:84px;height:84px;margin:-42px 0 0 -42px;pointer-events:none;z-index:21;display:none;transition:opacity .15s}
+  .lock-corner{position:absolute;width:20px;height:20px;border:2px solid rgba(255,255,255,.95);filter:drop-shadow(0 1px 2px rgba(0,0,0,.8))}
+  .lc-tl{left:0;top:0;border-right:none;border-bottom:none;border-radius:6px 0 0 0}
+  .lc-tr{right:0;top:0;border-left:none;border-bottom:none;border-radius:0 6px 0 0}
+  .lc-bl{left:0;bottom:0;border-right:none;border-top:none;border-radius:0 0 0 6px}
+  .lc-br{right:0;bottom:0;border-left:none;border-top:none;border-radius:0 0 6px 0}
+  /* Top bar */
+  #topbar{position:fixed;top:0;left:0;right:0;display:flex;justify-content:center;align-items:center;padding:10px;z-index:30;pointer-events:none}
+  #kill-counter{background:rgba(0,0,0,.45);color:#fff;padding:6px 16px;border-radius:20px;font-weight:700;font-size:14px;letter-spacing:.5px;backdrop-filter:blur(4px);border:1px solid rgba(255,255,255,.2)}
+  #settings-btn{position:fixed;top:10px;right:12px;z-index:40;width:48px;height:48px;border-radius:50%;border:2px solid rgba(255,255,255,.7);background:rgba(15,20,30,.65);color:#fff;font-size:22px;display:flex;align-items:center;justify-content:center;cursor:pointer;backdrop-filter:blur(6px);transition:transform .12s}
+  #settings-btn:active{transform:scale(1.15)}
+  #fs-btn{position:fixed;top:10px;left:12px;z-index:40;height:40px;padding:0 14px;border-radius:20px;border:1px solid rgba(255,255,255,.5);background:rgba(15,20,30,.55);color:#fff;font-size:13px;font-weight:700;cursor:pointer}
+  /* Joystick */
+  #joystick{position:fixed;left:22px;bottom:22px;width:132px;height:132px;border-radius:50%;background:rgba(255,255,255,.12);border:2px solid rgba(255,255,255,.45);z-index:30;backdrop-filter:blur(3px);touch-action:none}
+  #joy-knob{position:absolute;left:50%;top:50%;width:58px;height:58px;border-radius:50%;background:rgba(255,255,255,.85);box-shadow:0 4px 14px rgba(0,0,0,.35);transform:translate(-50%,-50%);transition:transform .05s linear}
+  /* Combat cluster — premium dark-metal HUD, Marvel-Rivals clarity */
+  #combat-cluster{position:fixed;right:12px;bottom:12px;width:260px;height:230px;z-index:30;pointer-events:none;--gold:#ffd23f}
+  .abtn{position:absolute;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;font-weight:800;cursor:pointer;pointer-events:auto;overflow:hidden;touch-action:none;
+    background:linear-gradient(160deg,#2b3038 0%,#171a1f 55%,#0e1114 100%);
+    border:2px solid #454c56;color:#dfe3e8;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.14),inset 0 -3px 6px rgba(0,0,0,.5),0 4px 14px rgba(0,0,0,.45);
+    transition:transform .1s ease,box-shadow .15s ease,border-color .15s ease,filter .15s ease}
+  .abtn svg{display:block;pointer-events:none}
+  .abtn .blabel{font-size:8px;font-weight:800;letter-spacing:1.4px;color:#9aa1ab;pointer-events:none;line-height:1}
+  .abtn.pressed{transform:scale(.9)!important;filter:brightness(1.35)}
+  .abtn.fired{border-color:var(--gold);box-shadow:inset 0 1px 0 rgba(255,255,255,.2),0 0 12px rgba(255,210,63,.55)}
+  .abtn.ready-pop{animation:readypop .28s ease}
+  @keyframes readypop{0%{box-shadow:0 0 0 0 rgba(255,210,63,.7)}100%{box-shadow:0 0 0 10px rgba(255,210,63,0)}}
+  .abtn .cd-overlay{position:absolute;inset:0;border-radius:50%;display:flex;align-items:center;justify-content:center;pointer-events:none;
+    background:conic-gradient(rgba(4,6,9,.82) calc(var(--cd,0)*1turn), rgba(4,6,9,.12) 0)}
+  .abtn .cd-text{font-size:13px;font-weight:800;color:#fff;text-shadow:0 1px 3px #000;display:none}
+  .abtn.on-cd .cd-text{display:block}
+  .abtn.on-cd{filter:saturate(.6) brightness(.85)}
+  .abtn.ability-active{border-color:var(--acc,#ffe14d);box-shadow:inset 0 1px 0 rgba(255,255,255,.16),0 0 0 2px var(--acc,#ffe14d),0 0 14px var(--acc,#ffe14d)}
+  .abtn.ability-active .blabel{color:var(--acc,#ffe14d)}
+  .abtn.disabled{opacity:.42;filter:grayscale(.75)}
+  #btn-attack{left:148px;top:118px;width:108px;height:108px;border-color:#6b5a17;color:var(--gold)}
+  #btn-attack svg{width:34px;height:34px}
+  #btn-attack .blabel{color:var(--gold);font-size:9px}
+  #btn-attack .pips{position:absolute;bottom:12px;left:0;right:0;display:flex;justify-content:center;gap:5px;pointer-events:none}
+  #btn-attack .pips i{width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,.22);border:1px solid rgba(255,210,63,.5)}
+  #btn-attack .pips i.on{background:var(--gold);box-shadow:0 0 6px rgba(255,210,63,.9)}
+  #btn-attack .pips i.big{width:9px;height:9px}
+  #btn-attack{box-shadow:inset 0 1px 0 rgba(255,255,255,.16),inset 0 -4px 8px rgba(0,0,0,.55),0 0 0 1px #000,0 4px 16px rgba(0,0,0,.5)}
+  .ability{--acc:#8b93a1;width:60px;height:60px}
+  .ability svg{width:24px;height:24px}
+  #ab1{--acc:#7cc4ff;left:72px;top:142px}
+  #ab2{--acc:#f0a35e;left:92px;top:82px}
+  #ab3{--acc:#ff7a7a;left:144px;top:46px}
+  #ab4{--acc:#9fe870;left:204px;top:47px}
+  .ability .blabel{color:var(--acc)}
+  /* Damage numbers + healthbars handled in 3D + HTML */
+  #dmg-layer{position:fixed;inset:0;pointer-events:none;z-index:25;overflow:hidden}
+  .dmg-num{position:absolute;font-weight:900;font-size:22px;color:#ffeb3b;text-shadow:0 0 6px #ff5722,0 2px 2px #000,-1px -1px 0 #000,1px -1px 0 #000,-1px 1px 0 #000,1px 1px 0 #000;transform:translate(-50%,-50%);will-change:transform,opacity;white-space:nowrap}
+  .dmg-num.crit{color:#ff5252;font-size:27px}
+  /* Settings panel — compact dark charcoal, pro game UI */
+  #settings-panel{position:fixed;top:64px;right:10px;width:min(300px,92vw);max-height:82vh;overflow-y:auto;background:#1c1e22;color:#d7dae0;border:1px solid #34373e;border-radius:10px;padding:12px 12px 10px;z-index:60;display:none;box-shadow:0 12px 32px rgba(0,0,0,.55)}
+  #settings-panel.open{display:block}
+  #settings-panel h2{font-size:12px;font-weight:700;margin:0 0 4px;text-align:left;letter-spacing:1.2px;text-transform:uppercase;color:#9aa0aa}
+  .srow{margin:0;padding:9px 2px;border-bottom:1px solid #2a2d33}
+  .srow:last-of-type{border-bottom:none}
+  .srow label{display:flex;justify-content:space-between;align-items:center;font-size:12.5px;font-weight:600;margin-bottom:6px;color:#cfd3da}
+  .srow label span.val{color:#e8eaee;font-weight:700;font-size:12px}
+  input[type=range]{width:100%;accent-color:#9aa3af;height:22px}
+  .toggle-row{display:flex;justify-content:space-between;align-items:center}
+  .toggle{width:40px;height:22px;border-radius:11px;background:#3a3d44;position:relative;cursor:pointer;transition:background .18s;flex-shrink:0;border:1px solid #4a4e57}
+  .toggle.on{background:#6f8200;border-color:#6f8200}
+  .toggle::after{content:'';position:absolute;top:2px;left:2px;width:16px;height:16px;background:#fff;border-radius:50%;transition:left .18s}
+  .toggle.on::after{left:20px}
+  .qbtns{display:flex;gap:6px}
+  .qbtns button{flex:1;padding:7px 0;border-radius:6px;border:1px solid #3a3d44;background:#24262c;color:#cfd3da;font-weight:700;font-size:12px;cursor:pointer;transition:background .15s}
+  .qbtns button.active{background:#33363d;border-color:#6f8200;color:#fff}
+  .seg{display:flex;gap:6px}
+  .seg button{flex:1;padding:7px 4px;border-radius:6px;border:1px solid #3a3d44;background:#24262c;color:#cfd3da;font-weight:700;font-size:11.5px;cursor:pointer}
+  .seg button.active{background:#33363d;border-color:#6f8200;color:#fff}
+  #reset-sens{width:100%;margin-top:6px;padding:7px;border-radius:6px;border:1px solid #3a3d44;background:#24262c;color:#cfd3da;font-weight:700;font-size:12px;cursor:pointer}
+  #close-settings{width:100%;margin:8px 0 2px;padding:9px;border-radius:6px;border:none;background:#e8eaee;color:#1c1e22;font-weight:800;cursor:pointer;font-size:13px}
+  #toast{position:fixed;left:50%;top:18%;transform:translateX(-50%);background:rgba(0,0,0,.7);color:#fff;padding:10px 18px;border-radius:24px;font-weight:800;z-index:70;display:none;font-size:15px}
+  #hit-vignette{position:fixed;inset:0;pointer-events:none;z-index:15;background:radial-gradient(ellipse at center,transparent 62%,rgba(255,30,30,.35) 100%);opacity:0;transition:opacity .15s}
+  #power-flash{position:fixed;inset:0;pointer-events:none;z-index:14;opacity:0}
+  /* Character select */
+  #char-btn{position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:40;height:40px;padding:0 16px;border-radius:20px;border:1px solid rgba(255,255,255,.5);background:rgba(15,20,30,.55);color:#fff;font-size:12px;font-weight:800;letter-spacing:1px;cursor:pointer}
+  #char-panel{position:fixed;top:60px;left:50%;transform:translateX(-50%);width:min(280px,90vw);background:#1c1e22;color:#d7dae0;border:1px solid #34373e;border-radius:10px;padding:14px;z-index:65;display:none;box-shadow:0 12px 32px rgba(0,0,0,.55);text-align:center}
+  #char-panel.open{display:block}
+  #char-panel h3{font-size:11px;letter-spacing:1.2px;text-transform:uppercase;color:#9aa0aa;margin-bottom:10px}
+  #char-preview{display:flex;justify-content:center;margin-bottom:8px}
+  #char-name{font-size:16px;font-weight:800;letter-spacing:2px;color:#fff;margin-bottom:2px}
+  #char-desc{font-size:11.5px;color:#9aa0aa;margin-bottom:10px}
+  #char-select{width:100%;padding:9px;border-radius:6px;border:none;background:#e8eaee;color:#1c1e22;font-weight:800;font-size:13px;cursor:pointer}
+  #char-select.selected{background:#6f8200;color:#fff}
+  /* Flight altitude buttons (visible only while flying) */
+  #fly-alt{position:fixed;left:170px;bottom:30px;z-index:31;display:none;flex-direction:column;gap:10px}
+  #fly-alt.show{display:flex}
+  #fly-alt button{width:52px;height:52px;border-radius:50%;border:2px solid rgba(255,255,255,.85);background:rgba(20,24,32,.7);color:#fff;font-size:20px;font-weight:800;touch-action:none}
+  /* Active ability state (legacy hook, superseded by per-button --acc above) */
+  .abtn.ability-active{border-color:var(--acc,#ffe14d)}
+</style>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js"}}</script>
+</head>
+<body>
+<canvas id="game-canvas"></canvas>
+<div id="hit-vignette"></div>
+<div id="power-flash"></div>
+<div id="reticle"><div id="aim-dot"></div></div>
+<div id="hitmarker"><i></i><i></i><i></i><i></i></div>
+<div id="lock-marker"><div class="lock-corner lc-tl"></div><div class="lock-corner lc-tr"></div><div class="lock-corner lc-bl"></div><div class="lock-corner lc-br"></div></div>
+<div id="dmg-layer"></div>
+<div id="topbar"><div id="kill-counter">TARGETS: 3</div></div>
+<button id="fs-btn">⛶ FULLSCREEN</button>
+<button id="char-btn" title="Character">◉ CHARACTER</button>
+<div id="settings-btn" title="Settings">⚙</div>
+<div id="joystick"><div id="joy-knob"></div></div>
+<div id="fly-alt"><button id="fly-up" title="Ascend">▲</button><button id="fly-down" title="Descend">▼</button></div>
+<div id="combat-cluster">
+  <div id="ab4" class="abtn ability" title="Flight"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 13.5-7-2.8-7 2.8L12 3z"/><path d="M12 3v7"/><path d="M4.5 18.5L3 21M19.5 18.5L21 21"/></svg><span class="blabel">FLY</span><div class="cd-overlay"><span class="cd-text"></span></div></div>
+  <div id="ab3" class="abtn ability" title="Dual-Hand Laser"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6.5l8.5 4M3 17.5l8.5-4M11.5 10.5H20"/><circle cx="20.5" cy="10.5" r="1.5" fill="currentColor" stroke="none"/></svg><span class="blabel">BEAM</span><div class="cd-overlay"><span class="cd-text"></span></div></div>
+  <div id="ab2" class="abtn ability" title="Missile Volley"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 19V10M6 10l-2 2M6 10l2 2M12 21V6M12 6l-2.4 2.4M12 6l2.4 2.4M18 19v-9M18 10l-2 2M18 10l2 2"/></svg><span class="blabel">VOLLEY</span><div class="cd-overlay"><span class="cd-text"></span></div></div>
+  <div id="ab1" class="abtn ability" title="Repulsor Spin"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M17.5 2.8v3.6h-3.6"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/></svg><span class="blabel">SPIN</span><div class="cd-overlay"><span class="cd-text"></span></div></div>
+  <div id="btn-attack" class="abtn" title="Fire missile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.1"/><path d="M12 2.5v3.2M12 18.3v3.2M2.5 12h3.2M18.3 12h3.2M5.3 5.3l2.2 2.2M16.5 16.5l2.2 2.2M18.7 5.3l-2.2 2.2M7.5 16.5l-2.2 2.2"/></svg><span class="blabel">ATTACK</span><span class="pips"><i></i><i></i><i></i></span><div class="cd-overlay"><span class="cd-text"></span></div></div>
+</div>
+<div id="char-panel">
+  <h3>Character Select</h3>
+  <div id="char-preview"><svg width="70" height="110" viewBox="0 0 70 110"><g stroke="#e8eaee" stroke-width="5" stroke-linecap="round" fill="none"><circle cx="35" cy="14" r="10" fill="#e8eaee" stroke="none"/><line x1="35" y1="26" x2="35" y2="62"/><line x1="35" y1="34" x2="16" y2="48"/><line x1="35" y1="34" x2="54" y2="48"/><line x1="35" y1="62" x2="22" y2="100"/><line x1="35" y1="62" x2="48" y2="100"/></g></svg></div>
+  <div id="char-name">IRONMAN</div>
+  <div id="char-desc">Flight-capable combat kit · missiles · repulsors · laser</div>
+  <button id="char-select">SELECT IRONMAN</button>
+</div>
+<div id="rotate-hint"><div style="font-size:44px">🔄</div><div>Rotate to <b>landscape</b> for best experience</div><button id="fs-btn2" style="padding:12px 26px;border-radius:24px;border:none;background:#7CB342;font-weight:900">TAP FOR FULLSCREEN</button></div>
+<div id="settings-panel">
+  <h2>Settings</h2>
+  <div class="srow"><label><span>◎ Target count</span><span class="val" id="v-targets">3</span></label><input id="s-targets" type="range" min="1" max="8" step="1" value="3"></div>
+  <div class="srow toggle-row"><span style="font-weight:600;font-size:12.5px">◉ Aim assist</span><div id="t-aim" class="toggle on"></div></div>
+  <div class="srow"><label><span>⌖ Aiming mode</span></label><div class="seg aimseg"><button data-aim="right" class="active">Right dot</button><button data-aim="above">Above dot</button></div></div>
+  <div class="srow"><label><span>⛉ Rig type</span></label><div class="seg rigseg"><button data-rig="r6">R6</button><button data-rig="r15" class="active">R15</button></div></div>
+  <div class="srow"><label><span>◐ Sensitivity</span><span class="val" id="v-sens">1.2</span></label><input id="s-sens" type="range" min="0.3" max="3" step="0.1" value="1.2"><button id="reset-sens">Reset to default</button></div>
+  <div class="srow"><label><span>♪ Volume</span><span class="val" id="v-vol">70%</span></label><input id="s-vol" type="range" min="0" max="100" step="1" value="70"></div>
+  <div class="srow toggle-row"><span style="font-weight:600;font-size:12.5px">↯ Camera shake</span><div id="t-shake" class="toggle on"></div></div>
+  <div class="srow"><label><span>✦ Quality</span></label><div class="qbtns"><button data-q="low">LOW</button><button data-q="medium" class="active">MED</button><button data-q="high">HIGH</button></div></div>
+  <button id="close-settings">DONE</button>
+</div>
+<div id="toast"></div>
+<script type="module">
+import * as THREE from 'three';
+
+/* ============ SETTINGS STATE ============ */
+const Settings = { targetCount:3, aimAssist:true, aimingMode:'right', sensitivity:1.2, volume:0.7, shake:true, quality:'medium', character:'none', rigType:'r15' };
+try{ const sr=localStorage.getItem('stickman-rig'); if(sr==='r6'||sr==='r15') Settings.rigType=sr; }catch(e){}
+const DEFAULT_SENS = 1.2;
+// Central graphics-quality controller: every visual system reads from Q().
+const QUALITY = {
+  low:{ pixelRatio:1, particles:8, trail:8, shadow:false, shadowSize:512, blob:0.34,
+        trailRate:0.25, boomScale:0.8, smokeRate:0.2, beamWidth:0.7, thrustRate:0.3, flashLight:false, boomLight:false },
+  medium:{ pixelRatio:Math.min(devicePixelRatio,1.5), particles:20, trail:22, shadow:true, shadowSize:1024, blob:0.27,
+        trailRate:0.55, boomScale:1.0, smokeRate:0.5, beamWidth:1.0, thrustRate:0.6, flashLight:true, boomLight:true },
+  high:{ pixelRatio:Math.min(devicePixelRatio,2), particles:42, trail:40, shadow:true, shadowSize:2048, blob:0.22,
+        trailRate:0.85, boomScale:1.25, smokeRate:0.9, beamWidth:1.3, thrustRate:1.0, flashLight:true, boomLight:true }
+};
+function Q(){ return QUALITY[Settings.quality]; }
+
+/* ============ AUDIO (procedural WebAudio, mastered mix bus) ============
+   Master chain: sources -> sfxGain -> duckGain -> compressor -> destination.
+   The compressor is the safety limiter (prevents clipping when volleys, spin
+   zaps and explosions overlap); duckGain carries transient ducking (sustained
+   laser/flight hums sit in the mix) and hit-stop dilation (world slows, mix
+   tightens momentarily so impacts land harder). */
+let audioCtx=null, masterGain=null, duckGain=null;
+function ensureAudio(){
+  if(audioCtx) return;
+  try{
+    audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+    masterGain=audioCtx.createGain(); masterGain.gain.value=Settings.volume;
+    duckGain=audioCtx.createGain(); duckGain.gain.value=1;
+    const comp=audioCtx.createDynamicsCompressor();
+    comp.threshold.value=-9; comp.knee.value=16; comp.ratio.value=9; comp.attack.value=0.003; comp.release.value=0.16;
+    masterGain.connect(duckGain); duckGain.connect(comp); comp.connect(audioCtx.destination);
+  }catch(e){}
+}
+function setVolume(v){ Settings.volume=v; if(masterGain) masterGain.gain.value=v; }
+// Transient duck for sustained layers: dip the bus briefly when a new bed starts.
+function duckBus(amt=0.55,hold=0.09){
+  if(!audioCtx||!duckGain) return;
+  const t=audioCtx.currentTime;
+  duckGain.gain.cancelScheduledValues(t);
+  duckGain.gain.setTargetAtTime(amt,t,0.02);
+  duckGain.gain.setTargetAtTime(1,t+hold,0.09);
+}
+// Hit-stop response: tighten the mix for the freeze window (called per frame).
+function setStopMix(on){
+  if(!audioCtx||!duckGain) return;
+  const t=audioCtx.currentTime;
+  duckGain.gain.setTargetAtTime(on?0.72:1,t,0.01);
+}
+// Rate limiter: keeps repeated one-shots (spin zaps, hit ticks) from stacking.
+const _sndGate={};
+function gate(key,ms){ const n=performance.now(); if(_sndGate[key]!==undefined && n-_sndGate[key]<ms) return false; _sndGate[key]=n; return true; }
+function beep(freq,dur,type='sine',vol=0.5,slide=0){ if(!audioCtx) return; const t=audioCtx.currentTime; const o=audioCtx.createOscillator(), g=audioCtx.createGain(); o.type=type; o.frequency.setValueAtTime(freq,t); if(slide) o.frequency.exponentialRampToValueAtTime(Math.max(20,freq+slide),t+dur); g.gain.setValueAtTime(vol,t); g.gain.exponentialRampToValueAtTime(0.001,t+dur); o.connect(g); g.connect(masterGain); o.start(t); o.stop(t+dur+0.02); }
+function noiseBurst(dur=0.3,vol=0.5,low=400){ if(!audioCtx) return; const t=audioCtx.currentTime; const len=Math.floor(audioCtx.sampleRate*dur); const buf=audioCtx.createBuffer(1,len,audioCtx.sampleRate); const d=buf.getChannelData(0); for(let i=0;i<len;i++) d[i]=(Math.random()*2-1)*(1-i/len); const s=audioCtx.createBufferSource(); s.buffer=buf; const f=audioCtx.createBiquadFilter(); f.type='lowpass'; f.frequency.value=low; const g=audioCtx.createGain(); g.gain.setValueAtTime(vol,t); g.gain.exponentialRampToValueAtTime(0.001,t+dur); s.connect(f); f.connect(g); g.connect(masterGain); s.start(t); }
+// Layered power-sound primitives: pitch sweeps, mechanical clicks, filtered whooshes, deep thumps.
+function vary(f,amt=0.06){ return f*(1+(Math.random()*2-1)*amt); }
+function sweep(f0,f1,dur,type='sawtooth',vol=0.2,delay=0){
+  if(!audioCtx) return; const t=audioCtx.currentTime+delay;
+  const o=audioCtx.createOscillator(), g=audioCtx.createGain();
+  o.type=type; o.frequency.setValueAtTime(Math.max(20,f0),t);
+  o.frequency.exponentialRampToValueAtTime(Math.max(20,f1),t+dur);
+  g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(vol,t+0.015);
+  g.gain.exponentialRampToValueAtTime(0.001,t+dur);
+  o.connect(g); g.connect(masterGain); o.start(t); o.stop(t+dur+0.03);
+}
+function click(delay=0,vol=0.25,freq=2200){
+  if(!audioCtx) return; const t=audioCtx.currentTime+delay;
+  const o=audioCtx.createOscillator(), g=audioCtx.createGain();
+  o.type='square'; o.frequency.value=freq;
+  g.gain.setValueAtTime(vol,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.035);
+  o.connect(g); g.connect(masterGain); o.start(t); o.stop(t+0.05);
+}
+function whoosh(dur=0.3,vol=0.22,f0=600,f1=3200,delay=0){
+  if(!audioCtx) return; const t=audioCtx.currentTime+delay;
+  const len=Math.max(1,Math.floor(audioCtx.sampleRate*dur));
+  const buf=audioCtx.createBuffer(1,len,audioCtx.sampleRate);
+  const d=buf.getChannelData(0); for(let i=0;i<len;i++) d[i]=(Math.random()*2-1)*(1-i/len*0.4);
+  const s=audioCtx.createBufferSource(); s.buffer=buf;
+  const f=audioCtx.createBiquadFilter(); f.type='bandpass'; f.Q.value=1.2;
+  f.frequency.setValueAtTime(f0,t); f.frequency.exponentialRampToValueAtTime(f1,t+dur);
+  const g=audioCtx.createGain(); g.gain.setValueAtTime(0.0001,t);
+  g.gain.exponentialRampToValueAtTime(vol,t+dur*0.3); g.gain.exponentialRampToValueAtTime(0.001,t+dur);
+  s.connect(f); f.connect(g); g.connect(masterGain); s.start(t);
+}
+function thump(vol=0.5,delay=0){
+  if(!audioCtx) return; const t=audioCtx.currentTime+delay;
+  const o=audioCtx.createOscillator(), g=audioCtx.createGain();
+  o.type='sine'; o.frequency.setValueAtTime(120,t); o.frequency.exponentialRampToValueAtTime(34,t+0.32);
+  g.gain.setValueAtTime(vol,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.4);
+  o.connect(g); g.connect(masterGain); o.start(t); o.stop(t+0.45);
+}
+function distVol(pos,base=1,range=60){ // distance attenuation vs camera
+  try{ const d=camera.position.distanceTo(pos); return base*THREE.MathUtils.clamp(1-d/range,0.15,1); }catch(e){ return base; }
+}
+const SFX = {
+  launch(){ ensureAudio(); beep(880,0.18,'sawtooth',0.22,-500); beep(440,0.12,'square',0.12,220); },
+  impact(){ ensureAudio(); noiseBurst(0.18,0.4,1800); beep(220,0.12,'triangle',0.3,-120); },
+  hit(){ ensureAudio(); beep(1200,0.09,'square',0.2,-300); },
+  explosion(v=1){ ensureAudio(); noiseBurst(0.5,0.55*v,900); thump(0.5*v); beep(90,0.45,'sine',0.5*v,-50); beep(55,0.5,'triangle',0.4*v,-20); },
+  ui(){ ensureAudio(); beep(660,0.06,'sine',0.15); },
+  empty(){ ensureAudio(); beep(180,0.12,'square',0.15); },
+  missile(){ ensureAudio(); click(0,0.22,2400); sweep(vary(320),vary(1500),0.28,'sawtooth',0.16,0.02); whoosh(0.32,0.18,700,3400,0.03); },
+  missileQuiet(){ ensureAudio(); click(0,0.10,2000); sweep(vary(300,0.1),vary(1200,0.1),0.24,'sawtooth',0.08,0.02); },
+  repulsor(){ ensureAudio(); sweep(vary(1500),vary(420),0.14,'square',0.16); whoosh(0.12,0.14,2600,900); },
+  laserStart(){ ensureAudio(); click(0,0.2,3200); sweep(vary(240),vary(980),0.22,'sawtooth',0.18,0.02); },
+  laserStop(){ ensureAudio(); sweep(vary(850),vary(180),0.18,'sawtooth',0.14); },
+  flightOn(){ ensureAudio(); sweep(vary(110),vary(300),0.35,'sawtooth',0.16); whoosh(0.4,0.16,400,1800); },
+  flightOff(){ ensureAudio(); sweep(vary(320),vary(90),0.3,'sawtooth',0.14); },
+  touchdown(){ ensureAudio(); thump(0.3); noiseBurst(0.12,0.15,500); },
+  jump(){ ensureAudio(); sweep(vary(420),vary(760),0.14,'triangle',0.14); click(0,0.08,1400); },
+  land(hard){ ensureAudio(); thump(hard?0.34:0.18); noiseBurst(hard?0.16:0.09,hard?0.14:0.08,420); },
+  hitmarker(){ ensureAudio(); if(!gate('hm',45)) return; beep(vary(1750,0.05),0.045,'square',0.14); },
+  hitmarkerKill(){ ensureAudio(); beep(1750,0.05,'square',0.16,0,0); beep(2400,0.09,'square',0.13,0,0.06); },
+  lockOn(){ ensureAudio(); if(!gate('lk',200)) return; beep(520,0.05,'sine',0.1); beep(780,0.07,'sine',0.1,0,0.05); },
+  spinLunge(){ ensureAudio(); whoosh(0.22,0.2,300,1500); sweep(vary(200),vary(560),0.2,'sawtooth',0.12); },
+  step(){ ensureAudio(); if(!audioCtx||!gate('stp',90)) return; click(0,0.05,900+Math.random()*200); },
+  burnTick(){ ensureAudio(); if(!audioCtx||!gate('burn',180)) return; beep(vary(900,0.15),0.06,'sawtooth',0.08,-200); },
+  flameBlast(){ ensureAudio(); click(0,0.2,1800); sweep(vary(180),vary(900),0.35,'sawtooth',0.2,0.02); whoosh(0.5,0.24,500,2600,0.02); noiseBurst(0.4,0.2,1400); },
+  novaBoom(){ ensureAudio(); click(0,0.26,1200); sweep(vary(140),vary(60),0.5,'sawtooth',0.22); noiseBurst(0.55,0.5,800); thump(0.55); beep(70,0.5,'sine',0.4,-30); },
+  pyroLaunch(){ ensureAudio(); click(0,0.22,2400); sweep(vary(300),vary(1600),0.3,'sawtooth',0.18,0.02); whoosh(0.35,0.2,700,3600,0.03); },
+  pyroBoom(){ ensureAudio(); noiseBurst(0.5,0.5,900); thump(0.5); beep(85,0.45,'sine',0.45,-45); },
+  fireball(){ ensureAudio(); sweep(vary(700),vary(280),0.16,'square',0.14); whoosh(0.14,0.13,2200,900); },
+};
+// Sustained looped hums (laser / flight / spin), created on demand, stopped cleanly.
+let laserHum=null, flightHum=null, spinHum=null;
+function startHum(kind){
+  ensureAudio(); if(!audioCtx) return null;
+  duckBus(0.7,0.12); // sustained layers dip the mix so they sit, not stack
+  try{
+    const o=audioCtx.createOscillator(), g=audioCtx.createGain();
+    o.type='sawtooth'; o.frequency.value=kind==='laser'?95:58; g.gain.value=kind==='laser'?0.07:0.09;
+    o.connect(g); g.connect(masterGain); o.start();
+    return {o,g};
+  }catch(e){ return null; }
+}
+function stopHum(h){ if(!h) return; try{ h.g.gain.setTargetAtTime(0.0001,audioCtx.currentTime,0.05); h.o.stop(audioCtx.currentTime+0.2); }catch(e){} }
+function startSpinHum(){
+  ensureAudio(); if(!audioCtx||spinHum) return;
+  try{
+    const o=audioCtx.createOscillator(), g=audioCtx.createGain();
+    o.type='triangle'; o.frequency.value=200; g.gain.value=0.06;
+    o.connect(g); g.connect(masterGain); o.start();
+    spinHum={o,g};
+  }catch(e){ spinHum=null; }
+}
+function stopSpinHum(){ stopHum(spinHum); spinHum=null; }
+
+/* ============ THREE SETUP ============ */
+const canvas = document.getElementById('game-canvas');
+const renderer = new THREE.WebGLRenderer({canvas, antialias:true, powerPreference:'high-performance'});
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+let shadowApplied = false;
+function applyQuality(){
+  const q=QUALITY[Settings.quality];
+  renderer.setPixelRatio(q.pixelRatio);
+  renderer.setSize(innerWidth,innerHeight);
+  const hadShadow = renderer.shadowMap.enabled;
+  renderer.shadowMap.enabled = q.shadow;
+  sun.castShadow = q.shadow;
+  if(sun.shadow.mapSize.x !== q.shadowSize){ sun.shadow.mapSize.set(q.shadowSize,q.shadowSize); if(sun.shadow.map){ sun.shadow.map.dispose(); sun.shadow.map=null; } }
+  // Toggling shadowMap.enabled at runtime requires material recompile
+  if(hadShadow !== q.shadow || !shadowApplied){ scene.traverse(o=>{ if(o.isMesh && o.material){ const m=o.material; if('needsUpdate' in m) m.needsUpdate=true; } }); shadowApplied=true; }
+  refreshBlobOpacity();
+  document.querySelectorAll('.qbtns button').forEach(b=>b.classList.toggle('active',b.dataset.q===Settings.quality));
+}
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x9fd0ef); // solid-color sky
+scene.fog = new THREE.Fog(0x9fd0ef, 80, 220);
+const camera = new THREE.PerspectiveCamera(62, innerWidth/innerHeight, 0.1, 300);
+const hemi = new THREE.HemisphereLight(0xffffff, 0x6a8f6a, 0.95); scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xffffff, 1.6); sun.position.set(18,30,12); sun.castShadow=true;
+sun.shadow.mapSize.set(1024,1024); sun.shadow.camera.left=-65; sun.shadow.camera.right=65; sun.shadow.camera.top=65; sun.shadow.camera.bottom=-65;
+sun.shadow.camera.near=5; sun.shadow.camera.far=80; sun.shadow.bias=-0.0004; sun.shadow.normalBias=0.02; sun.shadow.radius=4; scene.add(sun);
+
+/* Soft blob shadows (cheap, mobile-friendly, always follow characters) */
+let blobTex=null;
+function getBlobTex(){
+  if(blobTex) return blobTex;
+  const c=document.createElement('canvas'); c.width=c.height=128;
+  const ctx=c.getContext('2d');
+  const grd=ctx.createRadialGradient(64,64,6,64,64,62);
+  grd.addColorStop(0,'rgba(0,0,0,0.55)'); grd.addColorStop(0.55,'rgba(0,0,0,0.28)'); grd.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=grd; ctx.fillRect(0,0,128,128);
+  blobTex=new THREE.CanvasTexture(c); return blobTex;
+}
+const blobShadows=[];
+function addBlobShadow(size=1.25){
+  const m=new THREE.Mesh(new THREE.PlaneGeometry(size,size), new THREE.MeshBasicMaterial({map:getBlobTex(),transparent:true,opacity:QUALITY[Settings.quality].blob,depthWrite:false}));
+  m.rotation.x=-Math.PI/2; m.position.y=0.02; m.renderOrder=1; scene.add(m); blobShadows.push(m); return m;
+}
+function refreshBlobOpacity(){ const o=QUALITY[Settings.quality].blob; for(const m of blobShadows) m.material.opacity=o; }
+
+/* Arena: large flat minimalist gray test environment */
+const ARENA=110;
+function makeFloorTexture(){
+  const c=document.createElement('canvas'); c.width=c.height=256;
+  const ctx=c.getContext('2d');
+  ctx.fillStyle='#9aa0a6'; ctx.fillRect(0,0,256,256);
+  for(let i=0;i<2600;i++){
+    const v=140+Math.random()*40|0;
+    ctx.fillStyle=`rgba(${v},${v+2},${v+5},0.16)`;
+    ctx.fillRect(Math.random()*256,Math.random()*256,2,2);
+  }
+  ctx.strokeStyle='rgba(255,255,255,0.05)';
+  for(let i=0;i<=4;i++){ ctx.beginPath(); ctx.moveTo(i*64,0); ctx.lineTo(i*64,256); ctx.stroke(); ctx.beginPath(); ctx.moveTo(0,i*64); ctx.lineTo(256,i*64); ctx.stroke(); }
+  const t=new THREE.CanvasTexture(c); t.wrapS=t.wrapT=THREE.RepeatWrapping; t.repeat.set(18,18); return t;
+}
+const groundMat = new THREE.MeshStandardMaterial({map:makeFloorTexture(), color:0xbfc3c9, roughness:0.92, metalness:0.02});
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(ARENA,ARENA), groundMat);
+ground.rotation.x=-Math.PI/2; ground.receiveShadow=true; scene.add(ground);
+const grid = new THREE.GridHelper(ARENA, 30, 0xffffff, 0xdfe3e8);
+grid.material.transparent=true; grid.material.opacity=0.16; grid.position.y=0.02; scene.add(grid);
+// subtle distance markers (restrained rings, no decoration clutter)
+const ring = new THREE.Mesh(new THREE.RingGeometry(5.6,6.2,64), new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:0.35,side:THREE.DoubleSide}));
+ring.rotation.x=-Math.PI/2; ring.position.y=0.03; scene.add(ring);
+const ring2 = new THREE.Mesh(new THREE.RingGeometry(13.6,14,72), new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:0.18,side:THREE.DoubleSide}));
+ring2.rotation.x=-Math.PI/2; ring2.position.y=0.03; scene.add(ring2);
+// low neutral boundary curbs (double as laser/camera occluders)
+const wallMat = new THREE.MeshStandardMaterial({color:0x6e747c, roughness:0.8});
+const wallMeshes=[];
+[[0,-ARENA/2,ARENA,1],[0,ARENA/2,ARENA,1],[-ARENA/2,0,1,ARENA],[ARENA/2,0,1,ARENA]].forEach(([x,z,w,d])=>{
+  const m=new THREE.Mesh(new THREE.BoxGeometry(w,1.0,d),wallMat); m.position.set(x,0.5,z); m.castShadow=true; m.receiveShadow=true; scene.add(m); wallMeshes.push(m);
+});
+const PLAY_HALF = ARENA/2-2;   // invisible safety boundary for movement
+const FLY_MAX_H = 16;           // altitude limit
+const wallBoxes = wallMeshes.map(w=>new THREE.Box3().setFromObject(w)); // static occluders
+const _lray = new THREE.Ray();
+function clampToArena(v, margin=0){
+  const h=PLAY_HALF-margin;
+  v.x=THREE.MathUtils.clamp(v.x,-h,h);
+  v.z=THREE.MathUtils.clamp(v.z,-h,h);
+  return v;
+}
+/* ---- Lightweight combat-test structures: cover blocks, a tall pillar for
+   arc/LoS/aerial tests, and breakable crates. Same gray family, real collision:
+   they block movement, detonate missiles, stop the laser and the camera. ---- */
+const obstacles=[];   // {mesh,box,hp(-1=indestructible),alive,respawnT,crate}
+const camOccluders=[...wallMeshes];
+function addObstacle(x,z,w,h,d,hp,crate=false){
+  const shade=crate?0x8a8578:0x7d838c;
+  const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),
+    new THREE.MeshStandardMaterial({color:shade,roughness:0.85,metalness:0.03}));
+  m.position.set(x,h/2,z); m.castShadow=true; m.receiveShadow=true; scene.add(m);
+  const o={mesh:m,box:new THREE.Box3().setFromObject(m),hp,maxHp:hp,alive:true,respawnT:0,crate,
+    cx:x,cz:z,hw:w/2+0.5,hd:d/2+0.5,top:h};
+  obstacles.push(o); camOccluders.push(m);
+  return o;
+}
+addObstacle(14,-6,4,2,1,-1);        // cover block A
+addObstacle(-16,4,1,2,4,-1);        // cover block B
+addObstacle(0,-20,6,3,1,-1);        // long low wall (laser/arc test)
+addObstacle(-10,14,5,4,5,-1);       // tall pillar (aerial + lobbed shots)
+addObstacle(8,10,1.2,1.2,1.2,60,true);   // breakable crate
+addObstacle(-6,-12,1.2,1.2,1.2,60,true);  // breakable crate
+addObstacle(20,8,4,1.2,4,-1);       // low platform (hover/altitude + strafe test)
+addObstacle(-22,-14,3,1.6,1,-1);    // cover block C (flanking + LoS test)
+addObstacle(4,20,1.4,1.4,1.4,60,true);    // breakable crate C (volley spread test)
+function obstacleBoxes(out=[]){ // live occluder boxes for laser/camera tests
+  out.length=0;
+  for(let i=0;i<wallBoxes.length;i++) out.push(wallBoxes[i]);
+  for(const o of obstacles) if(o.alive) out.push(o.box);
+  return out;
+}
+const _occBoxes=[];
+function breakObstacle(o){
+  o.alive=false; o.respawnT=10; o.mesh.visible=false;
+  const ci=camOccluders.indexOf(o.mesh); if(ci>=0) camOccluders.splice(ci,1);
+  // gray debris burst with real gameplay position
+  const c=o.mesh.position.clone();
+  for(let i=0;i<10;i++){
+    const pm=new THREE.Mesh(smokeGeo,new THREE.MeshBasicMaterial({color:0x9aa0a6,transparent:true,opacity:0.85}));
+    pm.position.copy(c);
+    const v=new THREE.Vector3((Math.random()-0.5),Math.random()*0.9+0.3,(Math.random()-0.5)).normalize().multiplyScalar(3+Math.random()*5);
+    scene.add(pm); explosions.push({flash:pm,parts:[],ringM:null,life:0,dur:0.5});
+  }
+  SFX.explosion(0.7); triggerShake(0.25,0.2); camKick(0.1);
+  toast('CRATE DESTROYED');
+}
+function updateObstacles(dt){
+  for(const o of obstacles){
+    if(!o.alive && o.respawnT>0){
+      o.respawnT-=dt;
+      if(o.respawnT<=0){ o.alive=true; o.hp=o.maxHp; o.mesh.visible=true; camOccluders.push(o.mesh); }
+    }
+  }
+}
+function damageObstacles(pos,radius,dmg){
+  for(const o of obstacles){
+    if(!o.alive||o.hp<0) continue;
+    const c=o.mesh.position;
+    if(Math.hypot(c.x-pos.x,c.z-pos.z)<radius+1 && pos.y<o.top+1){
+      o.hp-=dmg;
+      if(o.hp<=0 && o.crate) breakObstacle(o);
+    }
+  }
+}
+function pointInObstacles(p){
+  for(const o of obstacles){ if(o.alive && p.x>o.box.min.x&&p.x<o.box.max.x&&p.y>o.box.min.y&&p.y<o.box.max.y&&p.z>o.box.min.z&&p.z<o.box.max.z) return o; }
+  return null;
+}
+// circle-vs-box push-out for the player (ground + low flight; flies over tall tops)
+function collideObstacles(pos,flyH){
+  const bodyY=flyH+1.0;
+  for(const o of obstacles){
+    if(!o.alive) continue;
+    if(bodyY>o.top+0.4) continue; // cleared it vertically
+    const dx=pos.x-o.cx, dz=pos.z-o.cz;
+    const px=o.hw-Math.abs(dx), pz=o.hd-Math.abs(dz);
+    if(px>0&&pz>0){
+      if(px<pz) pos.x=o.cx+Math.sign(dx||1)*(o.hw);
+      else pos.z=o.cz+Math.sign(dz||1)*(o.hd);
+    }
+  }
+  return pos;
+}
+
+/* ============ ROBLOX-STYLE RIGS (R6 + R15, shared skeleton API) ============
+   One coordinate system for both rigs: root at ground, hips pivot at HIP_H,
+   +Z forward, +Y up. Every limb capsule overlaps its pivot ball so joints are
+   gap-free in every pose. Both rigs expose identical nodes:
+   group, hips, spine, torso, headM, armL/R{sh,el,hand}, legL/R{hp,kn,ft},
+   handR/handL, mats. R6 genuinely has 6 body segments with locked mid-joints
+   (classic block motion); R15 has 15 articulated segments. */
+const HIP_H = 0.92;
+function clayMat(color){ return new THREE.MeshStandardMaterial({color, roughness:0.8, metalness:0.0}); }
+function rigShell(color){
+  const g=new THREE.Group();
+  const bm=clayMat(color);
+  const mesh=(geo,x=0,y=0,z=0,parent=g)=>{ const m=new THREE.Mesh(geo,bm); m.position.set(x,y,z); m.castShadow=true; parent.add(m); return m; };
+  return {g,bm,mesh};
+}
+function finishRig(type,partCount,caps,s){
+  return {type, partCount, caps, group:s.g, hips:s.hips, spine:s.spine, torso:s.torso, headM:s.headM,
+    armL:s.armL, armR:s.armR, legL:s.legL, legR:s.legR,
+    handR:s.armR.hand, handL:s.armL.hand, mats:[s.bm]};
+}
+/* R6 — classic 6-part block body: head, torso, 2 single-piece arms, 2 single-piece legs.
+   Mid-joint nodes exist for API compatibility but stay locked (no fake articulation). */
+function buildR6(color){
+  const s=rigShell(color); const {g,mesh}=s;
+  const hips=new THREE.Group(); hips.position.y=HIP_H; g.add(hips); s.hips=hips;
+  mesh(new THREE.BoxGeometry(0.34,0.22,0.24),0,0,0,hips);                    // pelvis block (part of torso assembly)
+  const spine=new THREE.Group(); spine.position.y=0.06; hips.add(spine); s.spine=spine;
+  const torso=mesh(new THREE.BoxGeometry(0.56,0.62,0.32),0,0.42,0,spine); s.torso=torso; // TORSO
+  const neck=new THREE.Group(); neck.position.y=0.78; spine.add(neck);
+  const headM=mesh(new THREE.SphereGeometry(0.21,20,16),0,0.16,0,neck); s.headM=headM; // HEAD
+  function makeArm(side){
+    const sh=new THREE.Group(); sh.position.set(0.38*side,0.66,0); spine.add(sh);
+    mesh(new THREE.SphereGeometry(0.10,10,8),0,0,0,sh);                     // shoulder cap
+    mesh(new THREE.BoxGeometry(0.20,0.62,0.22),0,-0.31,0,sh);                // ARM (single piece)
+    const el=new THREE.Group(); el.position.y=-0.62; sh.add(el);             // locked: R6 has no elbow
+    const hand=new THREE.Object3D(); hand.position.y=-0.06; el.add(hand);   // palm point
+    return {sh,el,hand};
+  }
+  function makeLeg(side){
+    const hp=new THREE.Group(); hp.position.set(0.13*side,HIP_H-0.04,0); g.add(hp);
+    mesh(new THREE.SphereGeometry(0.11,10,8),0,0,0,hp);                      // hip cap
+    mesh(new THREE.BoxGeometry(0.22,0.84,0.24),0,-0.44,0,hp);                // LEG (single piece)
+    const kn=new THREE.Group(); kn.position.y=-0.86; hp.add(kn);             // locked: R6 has no knee
+    const ft=new THREE.Object3D(); ft.position.set(0,-0.02,0.06); kn.add(ft); // sole point
+    return {hp,kn,ft};
+  }
+  s.armL=makeArm(-1); s.armR=makeArm(1); s.legL=makeLeg(-1); s.legR=makeLeg(1);
+  return finishRig('r6',6,{elbows:false,knees:false,wrists:false,torsoSplit:false},s);
+}
+/* R15 — 15 articulated segments: head, upper/lower torso, upper/lower arms,
+   hands, upper/lower legs, feet (×2 where paired). Full joint articulation. */
+function buildR15(color){
+  const s=rigShell(color); const {g,mesh}=s;
+  const hips=new THREE.Group(); hips.position.y=HIP_H; g.add(hips); s.hips=hips;
+  const lowerTorso=mesh(new THREE.CapsuleGeometry(0.11,0.16,4,10),0,0.06,0,hips); // LOWER TORSO
+  const spine=new THREE.Group(); spine.position.y=0.10; hips.add(spine); s.spine=spine;
+  const torso=mesh(new THREE.CapsuleGeometry(0.12,0.34,4,12),0,0.26,0,spine); s.torso=torso; // UPPER TORSO
+  mesh(new THREE.CylinderGeometry(0.055,0.065,0.10,10),0,0.50,0,spine);     // neck
+  const headM=mesh(new THREE.SphereGeometry(0.20,22,18),0,0.72,0,spine); s.headM=headM; // HEAD
+  const JB=new THREE.SphereGeometry(0.062,12,10);
+  function makeArm(side){
+    const sh=new THREE.Group(); sh.position.set(0.185*side,0.44,0); spine.add(sh);
+    mesh(JB,0,0,0,sh);
+    mesh(new THREE.CapsuleGeometry(0.055,0.20,3,10),0,-0.11,0,sh);          // UPPER ARM
+    const el=new THREE.Group(); el.position.y=-0.26; sh.add(el);
+    mesh(JB,0,0,0,el).scale.setScalar(0.85);
+    mesh(new THREE.CapsuleGeometry(0.048,0.18,3,10),0,-0.10,0,el);           // LOWER ARM
+    const hand=mesh(new THREE.SphereGeometry(0.06,12,10),0,-0.24,0,el);     // HAND
+    return {sh,el,hand};
+  }
+  function makeLeg(side){
+    const hp=new THREE.Group(); hp.position.set(0.10*side,HIP_H-0.02,0); g.add(hp);
+    mesh(JB,0,0,0,hp);
+    mesh(new THREE.CapsuleGeometry(0.064,0.26,3,10),0,-0.16,0,hp);           // UPPER LEG
+    const kn=new THREE.Group(); kn.position.y=-0.38; hp.add(kn);
+    mesh(JB,0,0,0,kn).scale.setScalar(0.9);
+    mesh(new THREE.CapsuleGeometry(0.054,0.26,3,10),0,-0.16,0,kn);           // LOWER LEG
+    const ft=mesh(new THREE.CapsuleGeometry(0.052,0.10,3,8),0,-0.42,0.07,kn); // FOOT
+    ft.rotation.x=Math.PI/2;
+    return {hp,kn,ft};
+  }
+  s.armL=makeArm(-1); s.armR=makeArm(1); s.legL=makeLeg(-1); s.legR=makeLeg(1);
+  return finishRig('r15',15,{elbows:true,knees:true,wrists:true,torsoSplit:true},s);
+}
+function buildRig(type,color){ return type==='r6'?buildR6(color):buildR15(color); }
+
+/* Player — clean dark clay stickman, rig type from Settings (persisted) */
+let playerRig = buildRig(Settings.rigType, 0x2b2b31);
+scene.add(playerRig.group);
+const playerBlob = addBlobShadow(1.3);
+// Animation controller state: attack = anticipation -> release(fire) -> recover
+const ATK_ANTICIP = 0.12, ATK_RELEASE = 0.12, ATK_DUR = 0.42;
+const BASE_SPEED = 7.0;
+// Iron Man kit state: 3-stage missile combo + 4 abilities (single source of truth)
+const COMBO_DMG = [22, 22, 30];      // stages 1+2 identical, stage 3 modest boost
+const COMBO_RADIUS = [2.2, 2.2, 3.6];
+const COMBO_CD = 0.55;
+const AB = {
+  spin:  { cd:0, cdMax:8,  dur:2.0, t:0, tick:0, lastHit:{} },
+  volley:{ cd:0, cdMax:10 },
+  laser: { cd:0, cdMax:8,  durMax:3.0, t:0, tick:0, holding:false },
+  fly:   { cd:0, cdMax:12, durMax:25, t:0 },
+  flame: { cd:0, cdMax:7,  dur:1.1, t:0, tick:0 },
+  nova:  { cd:0, cdMax:11 },
+  pyro:  { cd:0, cdMax:9 }
+};
+const fireballs=[];   // torch basic-attack projectiles
+const pyroShots=[];   // torch ability-3 heavy projectiles
+const flameJets=[];   // torch flame-blast + flight visuals (pooled transient cones)
+const player = { pos:new THREE.Vector3(0,0,10), yaw:Math.PI, speed:BASE_SPEED, walkPhase:0,
+  moving:false, atkT:0, pendingShot:false, aimBlend:0, recoil:0,
+  combo:0, comboIdle:0,               // missile combo stage + idle-reset timer
+  volleyPose:0, landing:false,
+  spinAngle:0, flyH:0, flyV:0, flying:false,
+  vel:new THREE.Vector3(), fvel:new THREE.Vector3(), stepIdx:0,
+  /* vertical physics: flyH is the single authoritative height (camera, blob,
+     obstacle tests and aiming all read it). Vertical state is explicit so
+     gravity, jump, coyote time, landing and flight all compose cleanly. */
+  vy:0, grounded:true, airT:0, coyoteT:0, jumpT:0, landT:0, lastFallSpeed:0, flyRoll:0 };
+/* HERO KIT REGISTRY — future-ready architecture: each hero owns its basic
+   attack profile, movement style, ability tuning, synergy rules and sounds.
+   Gameplay systems below read through activeKit() instead of hardcoded values
+   so a new hero can be added by registering one object (no game duplication). */
+const KITS = {
+  ironman: {
+    id:'ironman', baseSpeed:BASE_SPEED,
+    combo:{ dmg:COMBO_DMG, radius:COMBO_RADIUS, cd:COMBO_CD, resetTime:4 },
+    abilities:{
+      spin:  { cd:8,  dur:2.0, range:7.5, tick:0.3,  dmg:14 },
+      volley:{ cd:10, count:6, dmg:15, radius:2.0 },
+      laser: { cd:8,  dur:3.0, range:24, tick:0.15, dmg:9, airRangeBonus:6 },
+      fly:   { cd:12, dur:25, speed:9.5 }
+    },
+    synergy:{ volleySpinRefund:0.5, laserKillVolleyRefund:2, airMissileBoost:1.15 }
+  },
+  torch: {
+    id:'torch', baseSpeed:BASE_SPEED*1.05,
+    combo:{ dmg:[18,18,26], radius:[2.0,2.0,3.2], cd:0.5, resetTime:4 },
+    abilities:{
+      flame:{ cd:7,  dur:1.1, range:11, halfAngle:0.42, tick:0.12, dmg:10, burnDmg:3.6, burnDur:3.4 },
+      nova: { cd:11, radius:8, dmg:30, burnDmg:3.8, burnDur:3.6 },
+      pyro: { cd:9,  speed:42, dmg:46, radius:3.6, aoeDmg:24, burnDmg:4.0, burnDur:3.8 },
+      fly:  { cd:10, dur:25, speed:10.5 }
+    },
+    synergy:{ airFireBoost:1.15 }
+  }
+};
+/* Burning status — shared by every fire source. Timers live on the target so
+   damage continues after the originating projectile/effect is gone. Rules:
+   controlled tick interval (never per-frame), capped duration, and refresh
+   (extend, capped) rather than unlimited stacking. */
+const BURN = { tick:0.45, dur:3.2, maxDur:6.4, dmg:3.4 };
+function applyBurn(t, opts={}){
+  if(!t || !t.alive) return;
+  const dmg=opts.dmg ?? BURN.dmg;
+  const dur=opts.dur ?? BURN.dur;
+  const tick=opts.tick ?? BURN.tick;
+  if(t.burn){
+    // REFRESH rule: extend toward cap, keep the strongest per-tick damage
+    t.burn.t=Math.min(BURN.maxDur, t.burn.t+dur*0.6);
+    t.burn.dmg=Math.max(t.burn.dmg,dmg);
+    t.burn.next=Math.min(t.burn.next,tick);
+    return;
+  }
+  t.burn={ t:dur, tick, dmg, next:tick };
+  ensureBurnAura(t);
+}
+function ensureBurnAura(t){
+  if(t.burnAura) return;
+  const grp=new THREE.Group(); grp.position.y=1.15; grp.visible=false; t.rig.group.add(grp);
+  const q=Q();
+  const parts=[];
+  const n=q===QUALITY.low?2:(q===QUALITY.medium?4:6);
+  for(let i=0;i<n;i++){
+    const a=(i/n)*Math.PI*2;
+    const m=new THREE.Mesh(new THREE.SphereGeometry(0.16,7,6),
+      new THREE.MeshBasicMaterial({color:i%3===0?0xfff2b0:0xff7a1e,transparent:true,opacity:0.85,blending:THREE.AdditiveBlending,depthWrite:false}));
+    m.position.set(Math.cos(a)*0.34,Math.random()*0.45-0.1,Math.sin(a)*0.34);
+    grp.add(m); parts.push({m,base:m.position.y,ph:Math.random()*6.28});
+  }
+  t.burnAura={grp,parts,tick:0};
+}
+function updateBurnAura(t,dt,time){
+  const a=t.burnAura; if(!a) return;
+  const on=t.alive && t.burn && t.burn.t>0;
+  a.grp.visible=on; if(!on) return;
+  a.tick-=dt;
+  if(a.tick<=0){ // ember sparks shedding from the burning body
+    a.tick=0.09;
+    const pm=fxSpawn(fireEmberGeo,0xffd24a,true,0.9);
+    if(pm){ pm.position.copy(t.rig.group.position); pm.position.y+=0.9+Math.random()*1.1; pm.position.x+=(Math.random()-0.5)*0.5; pm.position.z+=(Math.random()-0.5)*0.5;
+      explosions.push({flash:pm,parts:[],ringM:null,life:0,dur:0.55}); }
+  }
+  for(const p of a.parts){
+    const s=0.7+0.45*Math.sin(time*9+p.ph);
+    p.m.scale.set(s,s*1.35,s);
+    p.m.position.y=p.base+((time*0.9+p.ph)%1)*0.5;
+  }
+}
+function updateBurning(dt,time){
+  for(const t of targets){
+    updateBurnAura(t,dt,time);
+    if(!t.burn || !t.alive) continue;
+    t.burn.t-=dt;
+    if(t.burn.t<=0){ t.burn=null; continue; }
+    t.burn.next-=dt;
+    if(t.burn.next<=0){
+      t.burn.next=t.burn.tick;
+      const wp=t.rig.group.position.clone(); wp.y=1.9;
+      applyDamage(t,t.burn.dmg,wp.clone(),0.35,'burn');
+      spawnDamageNumber(wp,t.burn.dmg,false,'burn');
+      if(gate('burncrackle',180)) SFX.burnTick();
+    }
+  }
+}
+function clearBurn(t){
+  if(t.burn){ t.burn=null; }
+  if(t.burnAura) t.burnAura.grp.visible=false;
+}
+function activeKit(){ return KITS[Settings.character] || KITS.ironman; }
+
+/* ---- VERTICAL PHYSICS: gravity, jump, coyote, landing ----
+   Shared by ground locomotion and flight: flight overrides gravity with its own
+   climb integration, and releasing flight mid-air resumes falling naturally. */
+const GRAVITY=22, JUMP_VEL=8.6, COYOTE=0.12;
+let jumpPressed=false;
+function tryJump(){
+  if(player.flying){ // flight already owns vertical movement; drop altitude instead
+    return;
+  }
+  if(player.atkT>0||AB.spin.t>0) return; // no jump mid-attack/spin: keeps commitments clean
+  if(player.coyoteT>0){
+    player.vy=JUMP_VEL; player.grounded=false; player.coyoteT=0; player.jumpT=0.28; player.airT=0;
+    SFX.jump(); triggerShake(0.05,0.1); camKick(0.05);
+  }
+}
+function updatePlayerPhysics(dt){
+  if(player.flying){
+    // flight height integration lives in updateFlight(); keep ground state parked
+    player.grounded=false; player.vy=0; player.coyoteT=0; return;
+  }
+  if(player.grounded){
+    player.coyoteT=COYOTE;
+    player.jumpT=Math.max(0,player.jumpT-dt);
+    player.landT=Math.max(0,player.landT-dt*1.6);
+    return;
+  }
+  // airborne: integrate gravity with a short apex hang for weight
+  player.airT+=dt;
+  player.jumpT=Math.max(0,player.jumpT-dt);
+  const hang=Math.abs(player.vy)<2.2?0.72:1; // reduced gravity near apex
+  player.vy-=GRAVITY*hang*dt;
+  player.flyH+=player.vy*dt;
+  player.lastFallSpeed=Math.max(player.lastFallSpeed,-player.vy);
+  if(player.flyH<=0){
+    player.flyH=0; player.vy=0; player.grounded=true;
+    const hard=player.lastFallSpeed>9;
+    player.landT=hard?1:0.55;
+    player.lastFallSpeed=0;
+    SFX.land(hard);
+    triggerShake(hard?0.22:0.08,hard?0.22:0.12);
+    camKick(hard?0.1:0.04);
+    landingDust();
+  }
+  player.coyoteT=Math.max(0,player.coyoteT-dt);
+}
+function landingDust(){
+  const q=Q(); if(Settings.quality==='low') return;
+  const entry={flash:null,parts:[],ringM:null,life:0,dur:0.45};
+  explosions.push(entry);
+  if(!gate('dust',120)) return;
+  for(let i=0;i<6;i++){
+    const pm=fxSpawn(smokeGeo,0xcfd4da,false,0.45);
+    if(!pm) break;
+    pm.position.set(player.pos.x+(Math.random()-0.5)*0.6,0.08,player.pos.z+(Math.random()-0.5)*0.6);
+    pm.scale.setScalar(0.45);
+    const v=new THREE.Vector3((Math.random()-0.5)*2.4,0.7+Math.random()*0.9,(Math.random()-0.5)*2.4);
+    entry.parts.push({m:pm,v,life:0,dur:0.45});
+  }
+}
+function resetKitCooldowns(){ atkTimer=0; try{ atkBuffer=0; }catch(e){} AB.spin.cd=0; AB.volley.cd=0; AB.laser.cd=0; AB.fly.cd=0; }
+function cancelAbilityFX(){
+  endSpin(false); endLaser(false); endFlight(false);
+  player.atkT=0; player.pendingShot=false;
+  try{ atkBuffer=0; }catch(e){}
+}
+/* Safe rig swap: cancel FX, swap the single player rig, restore state.
+   Camera + joystick read player.pos live, so they never disconnect. */
+function setRigType(t){
+  if(t!=='r6'&&t!=='r15') return;
+  if(Settings.rigType===t) return;
+  Settings.rigType=t; try{ localStorage.setItem('stickman-rig',t); }catch(e){}
+  document.querySelectorAll('.rigseg button').forEach(x=>x.classList.toggle('active',x.dataset.rig===t));
+  SFX.ui();
+  cancelAbilityFX();
+  player.flying=false; player.landing=false; player.flyH=0; player.flyV=0;
+  document.getElementById('fly-alt').classList.remove('show');
+  scene.remove(playerRig.group);
+  playerRig.group.traverse(o=>{ if(o.isMesh) o.geometry.dispose(); });
+  playerRig.mats.forEach(m=>m.dispose && m.dispose());
+  playerRig=buildRig(t,0x2b2b31);
+  player.spinAngle=0; player.volleyPose=0; player.atkT=0; player.pendingShot=false; player.recoil=0;
+  player.vel.set(0,0,0); player.fvel.set(0,0,0);
+  playerRig.group.position.copy(player.pos);
+  playerRig.group.rotation.set(0,player.yaw,0);
+  scene.add(playerRig.group);
+  toast(t==='r6'?'RIG: R6 CLASSIC':'RIG: R15 ARTICULATED');
+}
+function respawnPlayer(){
+  cancelAbilityFX(); resetKitCooldowns();
+  try{ atkBuffer=0; }catch(e){}
+  try{ manualLock=null; if(typeof clearLock==='function') clearLock(); }catch(e){}
+  player.pos.set(0,0,10); player.yaw=Math.PI; player.combo=0; player.comboIdle=0;
+  player.walkPhase=0; player.flyH=0; player.flyV=0; player.flying=false; player.landing=false;
+  player.speed=BASE_SPEED; player.spinAngle=0; player.volleyPose=0; player.recoil=0; player.turnVel=0;
+  player.vel.set(0,0,0); player.fvel.set(0,0,0); player.stepIdx=0;
+  document.getElementById('fly-alt').classList.remove('show');
+  playerRig.group.position.copy(player.pos); playerRig.group.rotation.set(0,player.yaw,0);
+  playerRig.hips.position.x=0;
+}
+
+/* ============ TARGETS ============ */
+const targets=[];
+const dmgLayer=document.getElementById('dmg-layer');
+function makeHealthBar(){
+  const grp=new THREE.Group();
+  const bg=new THREE.Mesh(new THREE.PlaneGeometry(1.3,0.16), new THREE.MeshBasicMaterial({color:0x111111,transparent:true,opacity:0.85,depthTest:false}));
+  const fg=new THREE.Mesh(new THREE.PlaneGeometry(1.3,0.16), new THREE.MeshBasicMaterial({color:0x53e02a,depthTest:false}));
+  fg.position.z=0.005; fg.geometry.translate(0,0,0);
+  // anchor left scaling: shift geometry so scale works from left
+  grp.add(bg,fg); grp.renderOrder=99; bg.renderOrder=99; fg.renderOrder=100;
+  return {grp,bg,fg};
+}
+const RESPAWN_DELAY = 3.0;
+function randomizeTargetPos(t){
+  const maxR=ARENA/2-10;
+  for(let tries=0;tries<14;tries++){
+    const a=Math.random()*Math.PI*2, r=10+Math.random()*Math.max(8,maxR-10);
+    let x=THREE.MathUtils.clamp(Math.cos(a)*r,-PLAY_HALF+2,PLAY_HALF-2);
+    let z=THREE.MathUtils.clamp(Math.sin(a)*r,-PLAY_HALF+2,PLAY_HALF-2);
+    if(Math.hypot(x-player.pos.x,z-player.pos.z)<7) continue;
+    let ok=true;
+    for(const o of targets){ if(o!==t && o.alive && Math.hypot(x-o.rig.group.position.x,z-o.rig.group.position.z)<5){ ok=false; break; } }
+    if(ok) for(const o of obstacles){ if(Math.abs(x-o.cx)<o.hw+1.5 && Math.abs(z-o.cz)<o.hd+1.5){ ok=false; break; } }
+    if(!ok) continue;
+    t.rig.group.position.set(x,0,z);
+    return;
+  }
+  t.rig.group.position.set(THREE.MathUtils.randFloat(-16,16),0,THREE.MathUtils.randFloat(-24,-10));
+}
+function resetTargetVisual(t){
+  t.rig.group.rotation.set(0,Math.random()*Math.PI*2,0);
+  t.rig.group.position.y=0;
+  t.rig.hips.position.y=HIP_H;
+  for(const k of ['armL','armR']) { t.rig[k].sh.rotation.set(0,0,0); t.rig[k].el.rotation.set(0,0,0); }
+  t.rig.group.traverse(o=>{ if(o.isMesh&&o.material.emissive!==undefined){ o.material.emissive.setRGB(0,0,0); o.material.emissiveIntensity=0; } });
+}
+let targetUid=0;
+function spawnTarget(i){
+  const rig=buildRig('r15',0xa89c8c); // polished light clay dummy, distinct from player
+  rig.group.traverse(o=>{ if(o.isMesh){o.material=o.material.clone();}});
+  scene.add(rig.group);
+  const hb=makeHealthBar(); hb.grp.position.set(0,2.55,0); rig.group.add(hb.grp);
+  const blob=addBlobShadow(1.25);
+  const t={ uid:++targetUid, rig, health:100, maxHealth:100, alive:true, flash:0, recoil:0, baseY:0, hb, blob, respawnT:0, ragdollT:0, hitOffset:0 };
+  randomizeTargetPos(t);
+  rig.group.rotation.y=Math.random()*Math.PI*2;
+  targets.push(t); updateKillCounter();
+}
+function respawnTarget(t){
+  randomizeTargetPos(t);
+  t.health=t.maxHealth; t.alive=true; t.flash=0; t.recoil=0; t.respawnT=0; t.ragdollT=0;
+  resetTargetVisual(t); updateHealthBar(t); updateKillCounter();
+}
+function updateRespawns(dt){
+  for(const t of targets){
+    if(!t.alive && t.respawnT>0){
+      t.respawnT-=dt;
+      if(t.respawnT<=0) respawnTarget(t);
+    }
+  }
+}
+function clearTargets(){ for(const t of targets){ scene.remove(t.rig.group); scene.remove(t.blob);} targets.length=0; }
+function syncTargetCount(n){ // spawn or remove slots; dead slots keep counting until respawn or removal
+  while(targets.length>n){ const t=targets.pop(); if(lockedTarget===t) clearLock(); scene.remove(t.rig.group); scene.remove(t.blob); const bi=blobShadows.indexOf(t.blob); if(bi>=0) blobShadows.splice(bi,1); }
+  while(targets.length<n){ spawnTarget(targets.length); }
+  document.getElementById('v-targets').textContent=n;
+  updateKillCounter();
+}
+function updateKillCounter(){ const a=targets.filter(t=>t.alive).length; document.getElementById('kill-counter').textContent=`TARGETS: ${a} / ${targets.length}`; }
+function updateHealthBar(t){ const f=Math.max(0,t.health/t.maxHealth); t.hb.fg.scale.x=f; t.hb.fg.position.x=-(1.3*(1-f))/2; t.hb.fg.material.color.set(f>0.5?0x53e02a:(f>0.25?0xffb300:0xff2222)); }
+for(let i=0;i<3;i++) spawnTarget(i);
+targets.forEach(updateHealthBar);
+
+/* Damage numbers (HTML floating, billboard equivalent) */
+const dmgPool=[];
+function spawnDamageNumber(worldPos, amount, crit=false){
+  const el=document.createElement('div'); el.className='dmg-num'+(crit?' crit':''); el.textContent=Math.round(amount);
+  dmgLayer.appendChild(el);
+  dmgPool.push({el, world:worldPos.clone(), life:0, dur:0.9, vy:70});
+}
+function updateDamageNumbers(dt){
+  for(let i=dmgPool.length-1;i>=0;i--){ const d=dmgPool[i]; d.life+=dt;
+    const k=d.life/d.dur; if(k>=1){ d.el.remove(); dmgPool.splice(i,1); continue; }
+    d.world.y+=dt*1.4;
+    const p=worldToScreen(d.world); if(!p.visible){ d.el.style.display='none'; continue; }
+    d.el.style.display='block';
+    d.el.style.left=p.x+'px'; d.el.style.top=(p.y - k*70)+'px';
+    d.el.style.opacity=String(1-k*k); d.el.style.transform=`translate(-50%,-50%) scale(${1+k*0.25})`;
+  }
+}
+const _v=new THREE.Vector3();
+function worldToScreen(w){ _v.copy(w).project(camera); const vis=_v.z<1; return {x:(_v.x*0.5+0.5)*innerWidth, y:(-_v.y*0.5+0.5)*innerHeight, visible:vis}; }
+
+/* ============ AIMING MODES + RAYCAST AIMING ============ */
+// Two alternative reticle positions (never simultaneous): right-of-character or above-character.
+const AIM_POS={ right:{x:0.58,y:0.50}, above:{x:0.50,y:0.40} };
+const aimRaycaster=new THREE.Raycaster();
+const groundPlane=new THREE.Plane(new THREE.Vector3(0,1,0),0);
+const _ndc=new THREE.Vector2(), _hitP=new THREE.Vector3();
+function layoutReticle(){ const p=AIM_POS[Settings.aimingMode]||AIM_POS.right; const r=document.getElementById('reticle'); r.style.left=(p.x*100)+'%'; r.style.top=(p.y*100)+'%'; const h=document.getElementById('hitmarker'); if(h){ h.style.left=(p.x*100)+'%'; h.style.top=(p.y*100)+'%'; } }
+function aimNdc(){ const p=AIM_POS[Settings.aimingMode]||AIM_POS.right; _ndc.set(p.x*2-1, -(p.y*2-1)); return _ndc; }
+function aimRay(){ aimRaycaster.setFromCamera(aimNdc(),camera); return aimRaycaster.ray; }
+function handWorldPos(){ const v=new THREE.Vector3(); playerRig.handR.getWorldPosition(v); return v; }
+// Precise world-space point indicated by the camera ray through the aim dot:
+// nearest target hit, else ground-plane hit, else far point along the ray.
+function computeAimPoint(maxDist=90){
+  const ray=aimRay();
+  let bestT=maxDist, bestPoint=null;
+  for(const t of targets){ if(!t.alive) continue;
+    const c=t.rig.group.position.clone(); c.y=1.3;
+    const toC=c.clone().sub(ray.origin); const tProj=toC.dot(ray.direction);
+    if(tProj<1||tProj>maxDist) continue;
+    const closest=ray.origin.clone().addScaledVector(ray.direction,tProj);
+    if(closest.distanceTo(c)<1.0 && tProj<bestT){ bestT=tProj; bestPoint=closest; }
+  }
+  if(bestPoint) return bestPoint;
+  if(ray.intersectPlane(groundPlane,_hitP) && ray.origin.distanceTo(_hitP)<maxDist) return _hitP.clone();
+  return ray.origin.clone().addScaledVector(ray.direction,maxDist);
+}
+
+/* ============ MISSILES & EXPLOSIONS (shared, pooled geos) ============ */
+const projectiles=[];   // basic combo missiles
+const volleyMissiles=[]; // ability-2 curved missiles
+const fadeBeams=[];      // short-lived repulsor beam flashes
+const projGeo=new THREE.SphereGeometry(0.22,14,12);
+const mslBodyGeo=new THREE.CylinderGeometry(0.09,0.09,0.5,10);
+const mslNoseGeo=new THREE.ConeGeometry(0.09,0.22,10);
+const mslFlameGeo=new THREE.ConeGeometry(0.08,0.3,8);
+const mslBodyMat=new THREE.MeshStandardMaterial({color:0xc8ccd2, roughness:0.4, metalness:0.6});
+const mslNoseMat=new THREE.MeshStandardMaterial({color:0xd84a30, roughness:0.5});
+const mslFlameMat=new THREE.MeshBasicMaterial({color:0xffb300, transparent:true, opacity:0.9});
+const smokeGeo=new THREE.SphereGeometry(0.11,6,5);
+const fireEmberGeo=new THREE.SphereGeometry(0.09,6,5);
+/* Transient FX mesh pool: recycles short-lived additive/transparent spheres
+   (smoke, sparks, thrust, palm parts) instead of allocating materials + meshes
+   every frame. Quality caps total live pooled meshes; acquire fails past cap. */
+const fxPool=[];
+const FXCAP={low:60,medium:120,high:220};
+let fxAlive=0;
+function fxSpawn(geo,color,additive,op){
+  for(const m of fxPool){
+    if(!m.visible && m.userData.geo===geo && m.userData.color===color && m.userData.add===additive){
+      m.visible=true; fxAlive++;
+      m.material.opacity=op; m.scale.set(1,1,1); m.rotation.set(0,0,0);
+      return m;
+    }
+  }
+  if(fxAlive>=FXCAP[Settings.quality]) return null;
+  const mat=new THREE.MeshBasicMaterial({color,transparent:true,opacity:op,
+    blending:additive?THREE.AdditiveBlending:THREE.NormalBlending,depthWrite:false});
+  const m=new THREE.Mesh(geo,mat);
+  m.userData={geo,color,add:additive,pooled:true}; m.visible=true;
+  scene.add(m); fxPool.push(m); fxAlive++;
+  return m;
+}
+function fxKill(m){ if(!m||!m.visible) return; m.visible=false; fxAlive=Math.max(0,fxAlive-1); }
+function fxFree(m){ if(m&&m.userData&&m.userData.pooled) fxKill(m); else if(m) scene.remove(m); }
+function buildMissileMesh(withLight=true){
+  const g=new THREE.Group();
+  const body=new THREE.Mesh(mslBodyGeo,mslBodyMat); body.castShadow=false; g.add(body);
+  const nose=new THREE.Mesh(mslNoseGeo,mslNoseMat); nose.position.y=0.36; g.add(nose);
+  const flame=new THREE.Mesh(mslFlameGeo,mslFlameMat.clone()); flame.position.y=-0.38; flame.rotation.x=Math.PI; g.add(flame);
+  if(withLight && Q().flashLight){ const l=new THREE.PointLight(0xffa030,5,8); l.position.y=-0.2; g.add(l); }
+  return {group:g, flame};
+}
+function orientAlong(group, vel){ const d=vel.clone().normalize(); group.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), d); }
+function fireMissile(dir, homingTarget, startPos, opts={}){
+  const {dmg=22, radius=2.2, big=false, speed=34, agile=false}=opts;
+  const {group, flame}=buildMissileMesh();
+  group.position.copy(startPos);
+  scene.add(group);
+  orientAlong(group, dir);
+  projectiles.push({mesh:group, flame, vel:dir.clone().multiplyScalar(speed), life:0, maxRange:95,
+    traveled:0, target:homingTarget||null, dmg, radius, big, agile, smokeT:0, hitDone:false, trailMeshes:[]});
+  SFX.missile();
+  triggerShake(0.10,0.10);
+}
+function explodeMissile(pos, dmg, radius, big, sizeMult=1, kick=1){
+  const q=Q(), s=q.boomScale*(big?1.35:1.0)*sizeMult;
+  const flash=new THREE.Mesh(new THREE.SphereGeometry(0.5*s,14,12), new THREE.MeshBasicMaterial({color:0xffd76e,transparent:true,opacity:0.95}));
+  flash.position.copy(pos); scene.add(flash);
+  const n=Math.round(q.particles*(big?1.6:1.0)*sizeMult);
+  const parts=[];
+  for(let i=0;i<n;i++){
+    const col=Math.random()<0.45?0xff7a1a:(Math.random()<0.5?0xffd76e:0x888888);
+    const pm=fxSpawn(smokeGeo,col,false,1);
+    if(!pm) break;
+    pm.position.copy(pos); pm.scale.setScalar(s);
+    const v=new THREE.Vector3((Math.random()-0.5),Math.random()*0.9+0.15,(Math.random()-0.5)).normalize().multiplyScalar((4+Math.random()*8)*s);
+    parts.push({m:pm,v,life:0,dur:(0.4+Math.random()*0.35)*(q===QUALITY.low?0.7:1)});
+  }
+  let ringM=null;
+  if(Settings.quality!=='low'){ ringM=new THREE.Mesh(new THREE.RingGeometry(0.3*s,0.65*s,28), new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:0.9,side:THREE.DoubleSide})); ringM.position.copy(pos); ringM.lookAt(camera.position); scene.add(ringM); }
+  explosions.push({flash,parts,ringM,life:0,dur:0.55});
+  if(q.boomLight){ /* flash light via shared temp light */ pulseLight(pos, big?8:5); }
+  // Real gameplay AoE: damage every valid target in radius (never the player)
+  if(dmg>0){
+    for(const t of targets){
+      if(!t.alive) continue;
+      const c=t.rig.group.position.clone(); c.y=1.2;
+      if(c.distanceTo(pos)<=radius+0.6){
+        applyDamage(t, dmg, pos.clone(), kick);
+        if(big) t.ragdollT=0.7; // brief ragdoll, auto-recovers in animateTargets
+      }
+    }
+    damageObstacles(pos,radius,dmg); // blasts also chew through breakable crates
+    // impact emphasis: tiny hit-stop + screen pulse scale with significance
+    hitStop(big?0.07:0.025);
+    screenPulse('255,170,70',big?0.26:0.15,big?0.3:0.2);
+  }
+  SFX.explosion(distVol(pos)); SFX.impact();
+  triggerShake(big?0.3:0.2,0.22);
+  camKick(big?0.16:0.07);
+  hitVignette();
+}
+// Shared reusable flash light (avoids per-explosion light allocation)
+const boomLight=new THREE.PointLight(0xffa040,0,18); scene.add(boomLight);
+let boomLightT=0;
+function pulseLight(pos,i){ boomLight.position.copy(pos); boomLight.position.y+=0.5; boomLight.intensity=i; boomLightT=0.25; }
+function destroyProj(i){ const p=projectiles[i]; scene.remove(p.mesh); p.trailMeshes.forEach(t=>fxKill(t.m)); projectiles.splice(i,1); }
+function missileHitsTarget(pos){
+  for(const t of targets){ if(!t.alive) continue;
+    const tp=t.rig.group.position; const dx=pos.x-tp.x, dz=pos.z-tp.z, dy=pos.y-1.2;
+    if(dx*dx+dz*dz<1.2 && Math.abs(dy)<1.7){ return t; }
+  }
+  return null;
+}
+function updateProjectiles(dt){
+  const q=Q();
+  for(let i=projectiles.length-1;i>=0;i--){ const p=projectiles[i];
+    if(p.target && p.target.alive && Settings.aimAssist){
+      const tp=p.target.rig.group.position.clone(); tp.y=1.35;
+      const desired=tp.sub(p.mesh.position).normalize().multiplyScalar(p.vel.length());
+      p.vel.lerp(desired, Math.min(1,dt*(p.agile?10:7)));
+    }
+    const step=p.vel.clone().multiplyScalar(dt);
+    p.mesh.position.add(step); p.traveled+=step.length(); p.life+=dt;
+    orientAlong(p.mesh, p.vel);
+    p.flame.scale.set(1,0.8+Math.random()*0.6,1);
+    // smoke trail (quality-scaled rate, pooled meshes)
+    p.smokeT-=dt;
+    if(p.smokeT<=0 && Math.random()<q.smokeRate){
+      p.smokeT=0.05;
+      const tm=fxSpawn(smokeGeo,0xcccccc,false,0.55);
+      if(tm){ tm.position.copy(p.mesh.position); p.trailMeshes.push({m:tm,life:0}); }
+      if(p.trailMeshes.length>q.trail){ const old=p.trailMeshes.shift(); fxKill(old.m); }
+    }
+    for(let j=p.trailMeshes.length-1;j>=0;j--){ const tr=p.trailMeshes[j]; tr.life+=dt; tr.m.material.opacity=Math.max(0,0.55-tr.life*1.8); tr.m.scale.multiplyScalar(1+dt*1.5); if(tr.life>0.4){ fxKill(tr.m); p.trailMeshes.splice(j,1);} }
+    const mp=p.mesh.position;
+    const hit=missileHitsTarget(mp);
+    const hitWall=Math.abs(mp.x)>PLAY_HALF+0.4||Math.abs(mp.z)>PLAY_HALF+0.4;
+    const hitCover=!hit && pointInObstacles(mp); // structures detonate missiles too
+    if(hit && !p.hitDone){ p.hitDone=true; explodeMissile(mp.clone(),p.dmg,p.radius,p.big); destroyProj(i); }
+    else if(!hit && (mp.y<0.12||hitWall||hitCover||mp.y>40)){ explodeMissile(mp.clone(),hitCover?p.dmg:0,p.radius,p.big); destroyProj(i); }
+    else if(p.traveled>p.maxRange||p.life>4){ explodeMissile(mp.clone(),0,p.radius,false); destroyProj(i); }
+  }
+}
+function updateExplosions(dt){
+  for(let i=explosions.length-1;i>=0;i--){ const e=explosions[i]; e.life+=dt; const k=e.life/e.dur;
+    if(k>=1){ fxFree(e.flash); if(e.ringM) scene.remove(e.ringM); e.parts.forEach(p=>fxFree(p.m)); explosions.splice(i,1); continue; }
+    e.flash.scale.setScalar(1+k*3.2); e.flash.material.opacity=0.95*(1-k);
+    if(e.ringM){ e.ringM.scale.setScalar(1+k*4); e.ringM.material.opacity=0.9*(1-k); }
+    for(const p of e.parts){ p.life+=dt; p.v.y-=dt*12; p.m.position.addScaledVector(p.v,dt); p.m.material.opacity=Math.max(0,1-p.life/p.dur); if(p.m.position.y<0.05){p.m.position.y=0.05;p.v.y*=-0.4;} }
+  }
+}
+function flashBtn(i){ // brief synergy-feedback flash on an ability button
+  const b=abBtns[i]; if(!b) return;
+  b.classList.add('fired'); setTimeout(()=>b.classList.remove('fired'),320);
+}
+function applyDamage(t, dmg, at, kick=1, src=null){
+  if(!t.alive) return;
+  t.health-=dmg; t.flash=Math.min(1.5,kick); t.recoil=Math.min(1.5,kick);
+  // red flash handled in update; recoil lean scales with kick, always recovers
+  const wp=t.rig.group.position.clone(); wp.y=2.3;
+  spawnDamageNumber(wp,dmg,dmg>28);
+  updateHealthBar(t);
+  SFX.hit();
+  // TIERED HIT CONFIRMATION: light ticks ping the reticle, kills flash red.
+  // Heavy sources (stage-3, volley direct) already shake via explodeMissile.
+  const killed=t.health<=0;
+  try{ pulseHitmarker(killed); }catch(e){}
+  if(killed) SFX.hitmarkerKill(); else SFX.hitmarker();
+  if(src==='spin' || src==='laser'){ triggerShake(0.05,0.08); }
+  if(t.health<=0){ t.alive=false; t.health=0; t.respawnT=RESPAWN_DELAY; updateHealthBar(t);
+    // death: fall over, then respawn after a few seconds at a new valid spot
+    toast('TARGET DOWN!'); updateKillCounter();
+    // SYNERGY focus payoff: a laser kill refunds volley cooldown (focused pressure rewarded)
+    if(src==='laser'){ AB.volley.cd=Math.max(0,AB.volley.cd-activeKit().synergy.laserKillVolleyRefund); flashBtn(1); }
+    if(lockedTarget===t) clearLock();
+  }
+}
+
+/* ============ INPUT: joystick + camera drag + keyboard (desktop validation) ============ */
+const joy={x:0,y:0,active:false,id:null};
+const keys={w:false,a:false,s:false,d:false,e:false,q:false}; // desktop WASD override, merges when stick idle
+const joyEl=document.getElementById('joystick'), knob=document.getElementById('joy-knob');
+function joyHandle(e){ const r=joyEl.getBoundingClientRect(); const cx=r.left+r.width/2, cy=r.top+r.height/2;
+  let dx=e.clientX-cx, dy=e.clientY-cy; const max=r.width/2-10; const len=Math.hypot(dx,dy);
+  if(len>max){ dx*=max/len; dy*=max/len; }
+  knob.style.transform=`translate(calc(-50% + ${dx}px),calc(-50% + ${dy}px))`;
+  joy.x=dx/max; joy.y=dy/max;
+}
+joyEl.addEventListener('pointerdown',e=>{ ensureAudio(); joy.active=true; joy.id=e.pointerId; joyEl.setPointerCapture(e.pointerId); joyHandle(e); });
+joyEl.addEventListener('pointermove',e=>{ if(joy.active&&e.pointerId===joy.id) joyHandle(e); });
+function joyEnd(e){ if(e.pointerId===joy.id){ joy.active=false; joy.id=null; joy.x=0;joy.y=0; knob.style.transform='translate(-50%,-50%)'; } }
+joyEl.addEventListener('pointerup',joyEnd); joyEl.addEventListener('pointercancel',joyEnd);
+
+// camera orbit by dragging anywhere except UI — fully unrestricted (straight up/down allowed)
+let camYaw=Math.PI, camPitch=0.32, dragging=false, lastX=0,lastY=0, dragId=null;
+let tapDownX=0, tapDownY=0, tapDownT=0, tapMoved=false;
+addEventListener('pointerdown',e=>{ ensureAudio(); if(e.target.closest('#joystick,#combat-cluster,#settings-panel,#char-panel,#fly-alt,#settings-btn,#fs-btn,#char-btn,.qbtns,.seg,button'))return; dragging=true; dragId=e.pointerId; lastX=e.clientX; lastY=e.clientY; tapDownX=e.clientX; tapDownY=e.clientY; tapDownT=performance.now(); tapMoved=false; },{passive:true});
+addEventListener('pointermove',e=>{ if(!dragging||e.pointerId!==dragId)return; const dx=e.clientX-lastX, dy=e.clientY-lastY; lastX=e.clientX; lastY=e.clientY;
+  if(Math.hypot(e.clientX-tapDownX,e.clientY-tapDownY)>10) tapMoved=true;
+  camYaw-=dx*0.005*Settings.sensitivity; camPitch+=dy*0.0045*Settings.sensitivity;
+  camPitch=THREE.MathUtils.clamp(camPitch,-1.55,1.55); },{passive:true});
+addEventListener('pointerup',e=>{ if(e.pointerId===dragId){dragging=false;dragId=null;
+  // tap (not drag) on open space: try manual target lock, never disturbs camera
+  if(!tapMoved && performance.now()-tapDownT<350) tryTapLock(e.clientX,e.clientY);
+} });
+/* Manual target lock: tap a dummy to prioritize it for ~2.5s. Aim assist keeps
+   validating range/alive state; manual aim is never overridden permanently. */
+let manualLock=null, manualLockUntil=0;
+const _tapNdc=new THREE.Vector2(), _tapPt=new THREE.Vector3();
+function tryTapLock(px,py){
+  if(!Settings.aimAssist){ toast('ENABLE AIM ASSIST TO LOCK'); return; }
+  _tapNdc.set((px/innerWidth)*2-1, -((py/innerHeight)*2-1));
+  aimRaycaster.setFromCamera(_tapNdc,camera);
+  const ray=aimRaycaster.ray;
+  let best=null, bestD=2.0;
+  for(const t of targets){
+    if(!t.alive) continue;
+    const c=t.rig.group.position.clone(); c.y=1.3;
+    const toC=c.clone().sub(ray.origin); const proj=toC.dot(ray.direction);
+    if(proj<1||proj>MAX_DIST) continue;
+    const perp=ray.origin.clone().addScaledVector(ray.direction,proj).distanceTo(c);
+    if(perp<bestD){
+      // never tap-lock through cover — keeps manual aim honest
+      try{ if(typeof losBlocked==='function' && losBlocked(camera.position,c)) continue; }catch(e){}
+      bestD=perp; best=t;
+    }
+  }
+  if(best){ manualLock=best; manualLockUntil=performance.now()+2500; SFX.ui(); }
+}
+/* Desktop validation keys: WASD move (when stick idle), Space jump, F fly toggle.
+   Mobile touch is untouched — keys only merge in when the joystick is idle. */
+addEventListener('keydown',e=>{
+  const k=e.key.toLowerCase();
+  if(k==='w'||k==='arrowup') keys.w=true;
+  else if(k==='a'||k==='arrowleft') keys.a=true;
+  else if(k==='s'||k==='arrowdown') keys.s=true;
+  else if(k==='d'||k==='arrowright') keys.d=true;
+  else if(k==='e') keys.e=true;
+  else if(k==='q') keys.q=true;
+  else if(k===' '){ e.preventDefault(); ensureAudio(); tryJump(); }
+  else if(k==='f'){ ensureAudio(); player.flying?endFlight(true):startFlight(); }
+});
+addEventListener('keyup',e=>{
+  const k=e.key.toLowerCase();
+  if(k==='w'||k==='arrowup') keys.w=false;
+  else if(k==='a'||k==='arrowleft') keys.a=false;
+  else if(k==='s'||k==='arrowdown') keys.s=false;
+  else if(k==='d'||k==='arrowright') keys.d=false;
+  else if(k==='e') keys.e=false;
+  else if(k==='q') keys.q=false;
+});
+addEventListener('wheel',e=>{ camDist=THREE.MathUtils.clamp(camDist+e.deltaY*0.01,4,10); },{passive:true});
+let camDist=6.2;
+camera.position.set(player.pos.x - Math.sin(camYaw)*Math.cos(camPitch)*camDist, 1.7+Math.sin(camPitch)*camDist+0.6, player.pos.z - Math.cos(camYaw)*Math.cos(camPitch)*camDist);
+camera.lookAt(player.pos.x,2.0,player.pos.z);
+
+/* camera effects controller: ONE owner of combat camera offsets.
+   Shake (random) + kick (directional dolly, never rotates view so aim stays
+   precise) are combined here, decayed safely, and applied AFTER collision so
+   effects can never push the camera through floor/walls. All gated by the
+   camera-shake setting. */
+let shakeAmp=0, shakeT=0;
+let kickAmt=0; // decaying dolly offset along view dir (positive = pull back)
+function triggerShake(amp,dur){ if(!Settings.shake) return; shakeAmp=Math.max(shakeAmp,amp); shakeT=Math.max(shakeT,dur); }
+function camKick(strength){ if(!Settings.shake) return; kickAmt=Math.min(0.55,kickAmt+strength); }
+function hitVignette(){ const v=document.getElementById('hit-vignette'); v.style.opacity='1'; setTimeout(()=>v.style.opacity='0',130); }
+/* hit-stop: momentary world slowdown on impacts. Input + camera keep real dt. */
+let hitStopT=0;
+let _wasStopped=false;
+function hitStop(dur){ hitStopT=Math.max(hitStopT,dur); }
+/* restrained per-power screen pulses (short, readable, quality-gated) */
+let flashPeak=0, flashT=0, flashDur=0.2, flashRGB='255,255,255', _flashEl=null;
+const flashEl=()=>_flashEl||(_flashEl=document.getElementById('power-flash'));
+function screenPulse(rgb,peak=0.2,dur=0.25){
+  if(Settings.quality==='low') peak*=0.6;
+  flashRGB=rgb; flashPeak=Math.max(flashPeak,peak); flashT=Math.max(flashT,dur); flashDur=Math.max(flashDur,dur);
+}
+function updateScreenFlash(dt){
+  const el=flashEl(); if(!el) return;
+  if(flashT>0){ flashT-=dt; const k=Math.max(0,flashT/flashDur);
+    el.style.background=`radial-gradient(ellipse at center, transparent 55%, rgba(${flashRGB},${(flashPeak*k).toFixed(3)}) 100%)`;
+    el.style.opacity='1';
+    if(flashT<=0){ el.style.opacity='0'; flashPeak=0; }
+  } else if(el.style.opacity!=='0'){ el.style.opacity='0'; }
+}
+
+/* ============ IRON MAN ABILITIES ============ */
+function requireIronman(){ if(Settings.character!=='ironman'){ toast('SELECT IRONMAN FIRST'); openCharPanel(true); return false; } return true; }
+function cancelOthers(except){
+  if(except!=='spin' && AB.spin.t>0) endSpin(true);
+  if(except!=='laser' && (AB.laser.t>0||AB.laser.holding)) endLaser(true);
+  if(except!=='fly' && player.flying) endFlight(true);
+}
+function palmWorld(hand){ const v=new THREE.Vector3(); hand.getWorldPosition(v); return v; }
+// --- short beam flashes (repulsor) ---
+const beamGeoUnit=new THREE.CylinderGeometry(1,1,1,8,1,true);
+function spawnBeam(from,to,color=0x9fe8ff,life=0.14,width=0.09){
+  const len=from.distanceTo(to);
+  if(len<0.05) return;
+  const m=new THREE.Mesh(beamGeoUnit,new THREE.MeshBasicMaterial({color,transparent:true,opacity:0.85,blending:THREE.AdditiveBlending,depthWrite:false}));
+  m.scale.set(width*Q().beamWidth,len,width*Q().beamWidth);
+  m.position.copy(from).add(to).multiplyScalar(0.5);
+  m.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),to.clone().sub(from).normalize());
+  scene.add(m); fadeBeams.push({m,life,max:life});
+}
+function updateBeams(dt){
+  for(let i=fadeBeams.length-1;i>=0;i--){ const b=fadeBeams[i]; b.life-=dt;
+    if(b.life<=0){ scene.remove(b.m); b.m.material.dispose(); fadeBeams.splice(i,1); continue; }
+    b.m.material.opacity=0.85*(b.life/b.max);
+  }
+}
+// --- ABILITY 1: double-hand repulsor spin ---
+function startSpin(){
+  ensureAudio(); if(AB.spin.t>0) return;
+  if(AB.spin.cd>0){ SFX.empty(); return; }
+  if(!requireIronman()) return;
+  cancelOthers('spin');
+  const sk=activeKit().abilities.spin; AB.spin.cdMax=sk.cd; AB.spin.dur=sk.dur;
+  AB.spin.t=AB.spin.dur; AB.spin.tick=0; AB.spin.burst=0; AB.spin.lastHit={};
+  player.spinAngle=0;
+  player.speed=BASE_SPEED*1.3; // mobile + aggressive, restored exactly on end
+  abBtns[0].classList.add('ability-active');
+  startSpinHum(); // continuous motion bed under the palm blasts
+  SFX.spinLunge(); // anticipation whoosh — attack release follows in updateSpin
+  SFX.repulsor();
+  camKick(0.08);
+}
+function endSpin(restore=true){
+  if(AB.spin.t<=0 && !abBtns[0].classList.contains('ability-active')) return;
+  AB.spin.t=0; player.speed=BASE_SPEED; AB.spin.lastHit={};
+  abBtns[0].classList.remove('ability-active');
+  stopSpinHum();
+  if(restore) AB.spin.cd=AB.spin.cdMax;
+}
+function updateSpin(dt){
+  if(AB.spin.t<=0) return;
+  AB.spin.t-=dt;
+  player.spinAngle+=dt*13;
+  if(spinHum){ try{ spinHum.o.frequency.value=190+45*Math.sin(player.spinAngle); }catch(e){} }
+  AB.spin.burst-=dt; AB.spin.tick-=dt;
+  // faint rotational-momentum pulse, never obscuring aim
+  AB.spin.pulse=(AB.spin.pulse||0)-dt;
+  if(AB.spin.pulse<=0){ AB.spin.pulse=0.5; screenPulse('140,200,255',0.06,0.35); }
+  const L=palmWorld(playerRig.handL), R=palmWorld(playerRig.handR);
+  if(AB.spin.burst<=0){ // visible bursts from BOTH palms, synced with spin
+    AB.spin.burst=0.14;
+    for(const [p,dir] of [[L,1],[R,1]]){
+      const out=p.clone().add(new THREE.Vector3(Math.cos(player.spinAngle)*dir,0.1,Math.sin(player.spinAngle)*dir).multiplyScalar(2.6));
+      spawnBeam(p,out,0x9fe8ff,0.13,0.10);
+      spawnPalmBurst(p,0x9fe8ff);
+    }
+    AB.spin.zapFlip=!AB.spin.zapFlip;
+    if(AB.spin.zapFlip) SFX.repulsor(); // every other burst: energetic but never stacked
+  }
+  if(AB.spin.tick<=0){ // controlled hit interval, per-target tracking
+    const sk=activeKit().abilities.spin; AB.spin.tick=sk.tick;
+    const now=performance.now()/1000;
+    // 3D punish radius: respects flight altitude — diving spins connect,
+    // high hover spins do not unfairly hit grounded targets.
+    const px=player.pos.x, py=player.flyH+1.0, pz=player.pos.z;
+    for(const t of targets){
+      if(!t.alive) continue;
+      const tp=t.rig.group.position;
+      const dx=tp.x-px, dy=1.2-py, dz=tp.z-pz;
+      const d3=Math.sqrt(dx*dx+dy*dy+dz*dz);
+      if(d3<=sk.range && (!AB.spin.lastHit[t.uid] || now-AB.spin.lastHit[t.uid]>=sk.tick)){
+        AB.spin.lastHit[t.uid]=now;
+        applyDamage(t,sk.dmg,t.rig.group.position.clone().setY(1.4),0.8,'spin');
+      }
+    }
+  }
+  if(AB.spin.t<=0) endSpin(true);
+}
+function spawnPalmBurst(p,color=0x9fe8ff){
+  const q=Q();
+  const flash=new THREE.Mesh(new THREE.SphereGeometry(0.22*q.boomScale,10,8),new THREE.MeshBasicMaterial({color,transparent:true,opacity:0.9,blending:THREE.AdditiveBlending,depthWrite:false}));
+  flash.position.copy(p); scene.add(flash);
+  explosions.push({flash,parts:[],ringM:null,life:0,dur:0.18});
+  const n=Math.max(2,Math.round(q.particles*0.25));
+  for(let i=0;i<n;i++){
+    const pm=fxSpawn(smokeGeo,color,true,0.8);
+    if(!pm) break;
+    pm.position.copy(p);
+    const v=new THREE.Vector3((Math.random()-0.5),Math.random()*0.6,(Math.random()-0.5)).normalize().multiplyScalar(3+Math.random()*4);
+    explosions[explosions.length-1].parts.push({m:pm,v,life:0,dur:0.3});
+  }
+}
+// --- ABILITY 2: six curving missiles ---
+function startVolley(){
+  ensureAudio(); if(AB.volley.cd>0){ SFX.empty(); return; }
+  if(!requireIronman()) return;
+  // Works grounded AND airborne: flight is positioning, volley is pressure.
+  // Never cancels flight — smooth air-to-volley transition by design.
+  const hand=handWorldPos();
+  let tgt=null, aimPoint;
+  if(Settings.aimAssist && lockedTarget && lockedTarget.alive){ tgt=lockedTarget; aimPoint=lockedTarget.rig.group.position.clone(); aimPoint.y=1.35; }
+  else aimPoint=computeAimPoint(130);
+  const wantYaw=Math.atan2((aimPoint.x-hand.x),(aimPoint.z-hand.z));
+  let dy=wantYaw-player.yaw; while(dy>Math.PI)dy-=Math.PI*2; while(dy<-Math.PI)dy+=Math.PI*2;
+  player.yaw+=dy*0.7; // ease toward launch — no snap, keeps strafe coherent
+  const vk=activeKit().abilities.volley; AB.volley.cdMax=vk.cd;
+  for(let i=0;i<vk.count;i++){
+    const side=(i%2?1:-1), k=Math.ceil(i/2);
+    const p0=hand.clone().add(new THREE.Vector3(side*(0.4+k*0.35),0.3+k*0.25,-0.3));
+    const mid=hand.clone().lerp(aimPoint,0.45);
+    const p1=mid.clone().add(new THREE.Vector3(side*(3+k*1.6),4.5+k*1.2,(k-1)*2.2));
+    volleyMissiles.push({mesh:buildMissileMesh(i<2), p0,p1,p2:aimPoint.clone(), t:-i*0.09, speed:0.9+Math.random()*0.25,
+      target:tgt, dmg:vk.dmg, radius:vk.radius, hitDone:false, smokeT:0, trailMeshes:[], track:!!(tgt&&Settings.aimAssist)});
+  }
+  for(const v of volleyMissiles.slice(-6)){ v.mesh.group.position.copy(v.p0); scene.add(v.mesh.group); }
+  AB.volley.cd=AB.volley.cdMax;
+  AB.volley.hitSet={}; // synergy ledger: distinct direct hits refund spin cooldown
+  SFX.missile(); triggerShake(0.15,0.15); camKick(0.10);
+  player.volleyPose=0.6; // brief launch pose
+}
+function bez(p0,p1,p2,t,out){ const a=1-t; out.set(0,0,0).addScaledVector(p0,a*a).addScaledVector(p1,2*a*t).addScaledVector(p2,t*t); return out; }
+const _bv=new THREE.Vector3(), _bv2=new THREE.Vector3();
+function updateVolley(dt){
+  for(let i=volleyMissiles.length-1;i>=0;i--){ const m=volleyMissiles[i];
+    if(m.t<0){ m.t+=dt; continue; } // staggered launches
+    if(!m.sounded){ m.sounded=true; SFX.missileQuiet(); } // distinct per-missile launch, never stacked
+    if(m.track && m.target && m.target.alive){ m.p2.copy(m.target.rig.group.position); m.p2.y=1.35; }
+    m.t+=dt*m.speed;
+    const t=Math.min(1,m.t);
+    bez(m.p0,m.p1,m.p2,t,_bv);
+    bez(m.p0,m.p1,m.p2,Math.min(1,t+0.02),_bv2);
+    _bv2.sub(_bv);
+    m.mesh.group.position.copy(_bv);
+    if(_bv2.lengthSq()>1e-8) orientAlong(m.mesh.group,_bv2);
+    m.mesh.flame.scale.set(1,0.8+Math.random()*0.6,1);
+    if(Math.random()<Q().smokeRate){
+      const tm=fxSpawn(smokeGeo,0xbbbbbb,false,0.5);
+      if(tm){ tm.position.copy(_bv); m.trailMeshes.push({m:tm,life:0}); }
+    }
+    for(let j=m.trailMeshes.length-1;j>=0;j--){ const tr=m.trailMeshes[j]; tr.life+=dt; tr.m.material.opacity=Math.max(0,0.5-tr.life*1.5); tr.m.scale.multiplyScalar(1+dt); if(tr.life>0.45){ fxKill(tr.m); m.trailMeshes.splice(j,1);} }
+    const hit=!m.hitDone && missileHitsTarget(_bv);
+    const hitCover=!hit && pointInObstacles(_bv);
+    // volley impacts: substantially larger presence, same damage/collision rules
+    if(hit){
+      m.hitDone=true;
+      // SYNERGY pressure→punish: each distinct direct hit refunds spin cooldown (no stacking per target)
+      if(AB.volley.hitSet && !AB.volley.hitSet[hit.uid]){
+        AB.volley.hitSet[hit.uid]=1;
+        AB.spin.cd=Math.max(0,AB.spin.cd-activeKit().synergy.volleySpinRefund);
+        flashBtn(0);
+      }
+      explodeMissile(_bv.clone(),m.dmg,m.radius,false,1.6,1.2); cleanupVolley(i);
+    }
+    else if(t>=1 || _bv.y<0.12 || hitCover || Math.abs(_bv.x)>PLAY_HALF+0.4 || Math.abs(_bv.z)>PLAY_HALF+0.4){
+      if(!m.hitDone) explodeMissile(_bv.clone(),hitCover?m.dmg:m.dmg*0.6,m.radius,false,1.6,1.0);
+      cleanupVolley(i);
+    }
+  }
+}
+function cleanupVolley(i){ const m=volleyMissiles[i]; scene.remove(m.mesh.group); m.trailMeshes.forEach(t=>fxKill(t.m)); volleyMissiles.splice(i,1); }
+// --- ABILITY 3: continuous dual-hand laser (short range, manual toggle) ---
+// Deliberately short, controlled range; airborne adds a small bonus (aerial superiority).
+function laserRange(){ const k=activeKit().abilities.laser; return k.range+(player.flyH>1?k.airRangeBonus:0); }
+let laserCore=null, laserGlow=null, laserHit=null, palmGlowL=null, palmGlowR=null, laserTip=null;
+function startLaser(){
+  ensureAudio(); if(AB.laser.holding) return;
+  if(AB.laser.cd>0){ SFX.empty(); return; }
+  if(!requireIronman()) return;
+  if(player.flying) endFlight(true); // incompatible: land first
+  if(AB.spin.t>0) endSpin(true);
+  const lk=activeKit().abilities.laser; AB.laser.cdMax=lk.cd; AB.laser.durMax=lk.dur;
+  AB.laser.holding=true; AB.laser.t=AB.laser.durMax; AB.laser.tick=0;
+  const q=Q(), w=q.beamWidth;
+  laserCore=new THREE.Mesh(beamGeoUnit,new THREE.MeshBasicMaterial({color:0xeaffff,transparent:true,opacity:0.95,blending:THREE.AdditiveBlending,depthWrite:false}));
+  laserGlow=new THREE.Mesh(beamGeoUnit,new THREE.MeshBasicMaterial({color:0x54d8ff,transparent:true,opacity:0.4,blending:THREE.AdditiveBlending,depthWrite:false}));
+  laserCore.scale.set(0.07*w,1,0.07*w); laserGlow.scale.set(0.22*w,1,0.22*w);
+  scene.add(laserCore,laserGlow);
+  const pg=new THREE.SphereGeometry(0.14,10,8);
+  palmGlowL=new THREE.Mesh(pg,new THREE.MeshBasicMaterial({color:0xbdf3ff,transparent:true,opacity:0.9,blending:THREE.AdditiveBlending,depthWrite:false}));
+  palmGlowR=palmGlowL.clone(); scene.add(palmGlowL,palmGlowR);
+  laserTip=new THREE.Mesh(new THREE.SphereGeometry(0.22,10,8),new THREE.MeshBasicMaterial({color:0xeaffff,transparent:true,opacity:0.9,blending:THREE.AdditiveBlending,depthWrite:false}));
+  scene.add(laserTip);
+  laserHum=startHum('laser');
+  abBtns[2].classList.add('ability-active');
+  SFX.laserStart();
+  screenPulse('120,220,255',0.14,0.3); // minimal activation flash
+  camKick(0.10);
+}
+function laserEndpoint(origin,dir){
+  const maxRange=laserRange();
+  let best=maxRange;
+  // walls + live test structures block (precomputed static + obstacle boxes)
+  obstacleBoxes(_occBoxes);
+  for(const box of _occBoxes){
+    _lray.set(origin,dir);
+    if(_lray.intersectBox(box,_hitP)){ const d=_hitP.distanceTo(origin); if(d<best) best=d; }
+  }
+  // floor blocks
+  if(dir.y<-0.001){ const t=-origin.y/dir.y; if(t>0&&t<best) best=t; }
+  return {point:origin.clone().addScaledVector(dir,best), dist:best};
+}
+function updateLaser(dt){
+  if(!AB.laser.holding) return;
+  AB.laser.t-=dt;
+  if(AB.laser.t<=0){ endLaser(true); return; }
+  const L=palmWorld(playerRig.handL), R=palmWorld(playerRig.handR);
+  const origin=L.clone().add(R).multiplyScalar(0.5);
+  let dir;
+  if(Settings.aimAssist && lockedTarget && lockedTarget.alive){
+    const c=lockedTarget.rig.group.position.clone(); c.y=1.35; dir=c.sub(origin).normalize();
+  } else dir=computeAimPoint(130).sub(origin).normalize();
+  const {point,dist}=laserEndpoint(origin,dir);
+  for(const [mesh,w] of [[laserCore,0.07*Q().beamWidth],[laserGlow,0.22*Q().beamWidth]]){
+    mesh.position.copy(origin).add(point).multiplyScalar(0.5);
+    mesh.scale.set(w,Math.max(0.1,dist),w);
+    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),dir);
+  }
+  palmGlowL.position.copy(L); palmGlowR.position.copy(R);
+  const s=1+Math.random()*0.25; palmGlowL.scale.setScalar(s); palmGlowR.scale.setScalar(s);
+  if(laserTip){ laserTip.position.copy(point); laserTip.scale.setScalar(1+0.15*Math.sin(performance.now()*0.03)); }
+  if(laserHum){ try{ laserHum.o.frequency.value=95+9*Math.sin(performance.now()*0.025); }catch(e){} }
+  // impact feedback at endpoint (quality-scaled, pooled)
+  if(Math.random()<Q().smokeRate){
+    const pm=fxSpawn(smokeGeo,0x9fe8ff,true,0.8);
+    if(pm){ pm.position.copy(point); explosions.push({flash:pm,parts:[],ringM:null,life:0,dur:0.15}); }
+  }
+  // controlled damage ticks, nearest target near the beam segment
+  AB.laser.tick-=dt;
+  if(AB.laser.tick<=0){
+    const lk=activeKit().abilities.laser; AB.laser.tick=lk.tick;
+    let bestT=null,bestD=1.4;
+    for(const t of targets){
+      if(!t.alive) continue;
+      const c=t.rig.group.position.clone(); c.y=1.3;
+      const along=c.clone().sub(origin).dot(dir);
+      if(along<1||along>dist) continue;
+      const perp=origin.clone().addScaledVector(dir,along).distanceTo(c);
+      if(perp<bestD){ bestD=perp; bestT=t; }
+    }
+    if(bestT) applyDamage(bestT,lk.dmg,bestT.rig.group.position.clone().setY(1.6),0.4,'laser');
+  }
+}
+function endLaser(cool=true){
+  if(!AB.laser.holding && !laserCore) return;
+  AB.laser.holding=false; AB.laser.t=0;
+  for(const m of [laserCore,laserGlow,palmGlowL,palmGlowR,laserTip]) if(m){ scene.remove(m); }
+  laserCore=laserGlow=palmGlowL=palmGlowR=laserTip=null;
+  stopHum(laserHum); laserHum=null;
+  abBtns[2].classList.remove('ability-active');
+  SFX.laserStop();
+  screenPulse('120,220,255',0.08,0.2);
+  camKick(0.06);
+  if(cool) AB.laser.cd=AB.laser.cdMax;
+}
+// --- ABILITY 4: flight ---
+const thrustGeo=new THREE.ConeGeometry(0.11,0.55,8);
+function thrustPuff(pos,color=0x9fe8ff){
+  const q=Q();
+  if(Math.random()>q.thrustRate) return;
+  const pm=fxSpawn(smokeGeo,color,true,0.75);
+  if(!pm) return;
+  pm.position.copy(pos);
+  pm.position.x+=(Math.random()-0.5)*0.15; pm.position.z+=(Math.random()-0.5)*0.15;
+  explosions.push({flash:pm,parts:[],ringM:null,life:0,dur:0.28});
+}
+let flyLight=null;
+function startFlight(){
+  ensureAudio(); if(player.flying) return;
+  if(AB.fly.cd>0){ SFX.empty(); return; }
+  if(!requireIronman()) return;
+  cancelOthers('fly');
+  const fk=activeKit().abilities.fly; AB.fly.cdMax=fk.cd; AB.fly.durMax=fk.dur;
+  player.flying=true; AB.fly.t=AB.fly.durMax;
+  if(!flyLight){ flyLight=new THREE.PointLight(0x9fe8ff,4,9); scene.add(flyLight); }
+  flightHum=startHum('flight');
+  document.getElementById('fly-alt').classList.add('show');
+  abBtns[3].classList.add('ability-active');
+  SFX.flightOn(); triggerShake(0.15,0.2); camKick(0.12);
+  screenPulse('170,255,190',0.10,0.4); // subtle launch response
+}
+function endFlight(cool=true){
+  if(!player.flying && AB.fly.t<=0) return;
+  player.flying=false; AB.fly.t=0; player.flyV=0;
+  if(player.flyH>0.05) player.landing=true; // smooth touchdown, never stuck mid-air
+  document.getElementById('fly-alt').classList.remove('show');
+  abBtns[3].classList.remove('ability-active');
+  stopHum(flightHum); flightHum=null;
+  SFX.flightOff();
+  if(cool) AB.fly.cd=AB.fly.cdMax;
+}
+let flyUpHeld=false, flyDownHeld=false;
+function updateFlight(dt){
+  if(!player.flying) return;
+  AB.fly.t-=dt;
+  if(AB.fly.t<=0){ endFlight(true); return; }
+  // GENUINE COMBAT FLIGHT: camera-relative strafe + forward/back, stable hover,
+  // damped climb/descent. Basic missiles + volley stay usable in air (aerial
+  // positioning payoff); spin/laser land first for a clean stance transition.
+  let jx=joy.x, jy=joy.y;
+  if(Math.hypot(jx,jy)<0.15 && (keys.w||keys.a||keys.s||keys.d)){ jx=(keys.d?1:0)-(keys.a?1:0); jy=(keys.s?1:0)-(keys.w?1:0); }
+  const mv=Math.hypot(jx,jy);
+  _move.set(0,0,0);
+  if(mv>0.15){
+    const fwd=new THREE.Vector3(Math.sin(camYaw),0,Math.cos(camYaw));
+    const right=new THREE.Vector3(-fwd.z,0,fwd.x);
+    _move.addScaledVector(fwd,-jy).addScaledVector(right,jx);
+    if(_move.lengthSq()>1) _move.normalize();
+    _move.multiplyScalar(activeKit().abilities.fly.speed);
+  }
+  player.fvel.x=THREE.MathUtils.damp(player.fvel.x,_move.x,8,dt);
+  player.fvel.z=THREE.MathUtils.damp(player.fvel.z,_move.z,8,dt);
+  player.pos.addScaledVector(player.fvel,dt);
+  const fspd=Math.hypot(player.fvel.x,player.fvel.z);
+  // In air with a live lock, face the target (precise aerial aiming);
+  // otherwise face travel direction. Never snaps.
+  const hasLockF=(typeof lockedTarget!=='undefined' && lockedTarget && lockedTarget.alive);
+  if(hasLockF && (mv>0.15 || AB.laser.holding)){
+    const tp=lockedTarget.rig.group.position;
+    const ty=Math.atan2(tp.x-player.pos.x,tp.z-player.pos.z);
+    let dd=ty-player.yaw; while(dd>Math.PI)dd-=Math.PI*2; while(dd<-Math.PI)dd+=Math.PI*2;
+    player.yaw+=dd*Math.min(1,dt*10);
+  } else if(fspd>1){
+    const ty=Math.atan2(player.fvel.x,player.fvel.z);
+    let dd=ty-player.yaw; while(dd>Math.PI)dd-=Math.PI*2; while(dd<-Math.PI)dd+=Math.PI*2;
+    player.yaw+=dd*Math.min(1,dt*6);
+  }
+  clampToArena(player.pos);
+  collideObstacles(player.pos,player.flyH);
+  // altitude: buttons (mobile) + E/Q (desktop), damped for stable hover
+  const climb=((flyUpHeld||keys.e)?1:0)-((flyDownHeld||keys.q)?1:0);
+  player.flyV=THREE.MathUtils.damp(player.flyV,climb*6,8,dt);
+  player.flyH=THREE.MathUtils.clamp(player.flyH+player.flyV*dt,0,FLY_MAX_H);
+  if(player.flyH>=FLY_MAX_H-0.01 && player.flyV>0) player.flyV=0; // ceiling holds, no jitter
+  if(flightHum){ try{ flightHum.o.frequency.value=58+player.flyV*2.2; }catch(e){} } // thrusters track climb
+  // propulsion from both hands + both feet, synced to flight
+  thrustPuff(palmWorld(playerRig.handL)); thrustPuff(palmWorld(playerRig.handR));
+  const fl=new THREE.Vector3(), fr=new THREE.Vector3();
+  playerRig.legL.ft.getWorldPosition(fl); playerRig.legR.ft.getWorldPosition(fr);
+  thrustPuff(fl,0xffc46e); thrustPuff(fr,0xffc46e);
+  if(flyLight){ flyLight.position.copy(player.pos); flyLight.position.y+=player.flyH+1.2; }
+}
+
+/* ============ ATTACK + ABILITY BUTTONS ============ */
+const ATK_CD=COMBO_CD;
+function atkCdMax(){ return activeKit().combo.cd; }
+let atkTimer=0, atkBuffer=0;
+const atkBtn=document.getElementById('btn-attack');
+const abBtns=[...document.querySelectorAll('.ability')];
+function pressAnim(el){
+  // pressed: immediate subtle compression; fired: activation flash; then clean release
+  el.classList.add('pressed');
+  setTimeout(()=>{ el.classList.remove('pressed'); el.classList.add('fired'); },130);
+  setTimeout(()=>{ el.classList.remove('fired'); },380);
+}
+function bindPress(el){
+  el.addEventListener('pointerdown',()=>el.classList.add('pressed'));
+  const rel=()=>el.classList.remove('pressed');
+  el.addEventListener('pointerup',rel);
+  el.addEventListener('pointercancel',rel);
+  el.addEventListener('pointerleave',rel);
+}
+function updateCooldownUI(dt){
+  atkTimer=Math.max(0,atkTimer-dt);
+  renderCd(atkBtn,atkTimer,atkCdMax());
+  AB.spin.cd=Math.max(0,AB.spin.cd-dt);
+  AB.volley.cd=Math.max(0,AB.volley.cd-dt);
+  AB.laser.cd=Math.max(0,AB.laser.cd-dt);
+  AB.fly.cd=Math.max(0,AB.fly.cd-dt);
+  renderCd(abBtns[0],AB.spin.cd,AB.spin.cdMax,AB.spin.t>0?AB.spin.t.toFixed(1)+'s':null);
+  renderCd(abBtns[1],AB.volley.cd,AB.volley.cdMax);
+  renderCd(abBtns[2],AB.laser.cd,AB.laser.cdMax,AB.laser.holding?AB.laser.t.toFixed(1)+'s':null);
+  renderCd(abBtns[3],AB.fly.cd,AB.fly.cdMax,player.flying?'FLY':null);
+  // combo stage pips: highlight the NEXT stage to fire (3rd pip enlarged = finisher)
+  const pips=atkBtn.querySelectorAll('.pips i');
+  for(let i=0;i<pips.length;i++){
+    pips[i].classList.toggle('on',i===player.combo);
+    pips[i].classList.toggle('big',i===2);
+  }
+}
+function renderCd(btn,t,total,activeText){
+  const tx=btn.querySelector('.cd-text');
+  const frac=total>0?THREE.MathUtils.clamp(t/total,0,1):0;
+  btn.style.setProperty('--cd',frac.toFixed(3));
+  if(activeText){ btn.classList.add('on-cd'); tx.textContent=activeText; }
+  else if(t>0){ btn.classList.add('on-cd'); tx.textContent=t.toFixed(1)+'s'; }
+  else {
+    if(btn.classList.contains('on-cd')){ // ready: clear return-to-normal pop
+      btn.classList.remove('on-cd'); tx.textContent='';
+      btn.classList.remove('ready-pop'); void btn.offsetWidth; btn.classList.add('ready-pop');
+    }
+  }
+}
+const explosions=[];
+function releaseShot(){
+  // IRONMAN 3-stage missile combo, fired at the end of anticipation.
+  // Stages 1+2 identical; stage 3 modest boost + larger blast + brief ragdoll.
+  // Fires while moving / flying: yaw eases toward the shot (no snap) so the
+  // strafe-facing controller keeps body movement coherent.
+  const stage=player.combo;
+  const hand=handWorldPos();
+  let tgt=null, aimPoint;
+  if(Settings.aimAssist && lockedTarget && lockedTarget.alive){ tgt=lockedTarget; aimPoint=lockedTarget.rig.group.position.clone(); aimPoint.y=1.35; }
+  else { aimPoint=computeAimPoint(130); }
+  const dir=aimPoint.clone().sub(hand);
+  if(dir.lengthSq()<1e-6) camera.getWorldDirection(dir);
+  dir.normalize();
+  const wantYaw=Math.atan2(dir.x,dir.z);
+  let dy=wantYaw-player.yaw; while(dy>Math.PI)dy-=Math.PI*2; while(dy<-Math.PI)dy+=Math.PI*2;
+  player.yaw+=dy*0.75; // fast ease — responsive without teleporting the body
+  spawnPalmBurst(hand.clone().addScaledVector(dir,0.35),0xffc46e); // muzzle flash at launch
+  // SYNERGY aerial superiority: firing while airborne trades altitude for missile speed + agility
+  const airborne=player.flyH>1;
+  const kit=activeKit();
+  fireMissile(dir,tgt,hand,{dmg:kit.combo.dmg[stage], radius:kit.combo.radius[stage], big:stage===2,
+    speed:34*(airborne?kit.synergy.airMissileBoost:1), agile:airborne});
+  camKick(stage===2?0.12:0.05); // launch impulse scales with stage
+  if(stage===2) pokePlayer(1); // stage-3 blast kick: brief believable recoil, auto-recovers
+  player.combo=(stage+1)%3; player.comboIdle=0; // reliable advance, wraps after stage 3
+}
+function tryAttack(){
+  ensureAudio(); if(audioCtx&&audioCtx.state==='suspended') audioCtx.resume();
+  pressAnim(atkBtn);
+  // INPUT BUFFERING: taps during recovery/cooldown queue the next shot instead
+  // of being dropped — core to a responsive hero-shooter feel on mobile.
+  if(atkTimer>0 || player.atkT>0){ atkBuffer=0.28; if(atkTimer>0) SFX.empty(); return; }
+  atkTimer=activeKit().combo.cd;
+  // Start attack: brief anticipation plays first, missile releases on schedule.
+  player.atkT=ATK_DUR; player.pendingShot=true;
+}
+atkBtn.addEventListener('pointerdown',e=>{ e.preventDefault(); tryAttack(); });
+bindPress(atkBtn);
+// 1 Repulsor Spin · 2 Six Missiles · 3 Dual Laser (hold) · 4 Flight (toggle)
+abBtns.forEach(bindPress);
+abBtns[0].addEventListener('pointerdown',e=>{ e.preventDefault(); ensureAudio(); SFX.ui(); pressAnim(abBtns[0]); startSpin(); });
+abBtns[1].addEventListener('pointerdown',e=>{ e.preventDefault(); ensureAudio(); SFX.ui(); pressAnim(abBtns[1]); startVolley(); });
+abBtns[2].addEventListener('pointerdown',e=>{ e.preventDefault(); ensureAudio(); pressAnim(abBtns[2]); AB.laser.holding?endLaser(true):startLaser(); }); // toggle: stays on until pressed again or duration ends
+abBtns[3].addEventListener('pointerdown',e=>{ e.preventDefault(); ensureAudio(); SFX.ui(); pressAnim(abBtns[3]); player.flying?endFlight(true):startFlight(); });
+const flyUpBtn=document.getElementById('fly-up'), flyDownBtn=document.getElementById('fly-down');
+flyUpBtn.addEventListener('pointerdown',e=>{ e.preventDefault(); flyUpHeld=true; });
+flyDownBtn.addEventListener('pointerdown',e=>{ e.preventDefault(); flyDownHeld=true; });
+addEventListener('pointerup',()=>{ flyUpHeld=false; flyDownHeld=false; });
+addEventListener('pointercancel',()=>{ flyUpHeld=false; flyDownHeld=false; });
+
+/* ============ AIM ASSIST ============ */
+let lockedTarget=null;
+const lockEl=document.getElementById('lock-marker');
+const MAX_ANGLE_DEG=12, MAX_DIST=70;
+const _losRay=new THREE.Raycaster();
+function losBlocked(from,to){
+  // Line-of-sight: test structures + curbs break locks and manual taps,
+  // so indicators never claim a target you cannot actually hit.
+  _losRay.set(from,to.clone().sub(from).normalize());
+  _losRay.far=from.distanceTo(to)-0.6;
+  const hits=_losRay.intersectObjects(camOccluders,false);
+  return hits.length>0;
+}
+function updateAimAssist(){
+  if(!Settings.aimAssist){ clearLock(); return; }
+  const aimDir=aimRay().direction.clone();
+  // Acquisition: smallest angle to the aim ray wins (true aim-direction
+  // priority, not nearest-target). Near-equal angles prefer nearer target.
+  let best=null,bestAngle=THREE.MathUtils.degToRad(MAX_ANGLE_DEG),bestDist=1e9;
+  for(const t of targets){ if(!t.alive) continue;
+    const tp=t.rig.group.position.clone(); tp.y=1.4;
+    const toT=tp.sub(camera.position); const dist=toT.length(); if(dist>MAX_DIST) continue;
+    toT.normalize(); const ang=aimDir.angleTo(toT);
+    if(ang<bestAngle-0.026 || (Math.abs(ang-bestAngle)<0.026 && dist<bestDist)){
+      // LoS gate at acquisition: never lock through cover
+      const wp=t.rig.group.position.clone(); wp.y=1.4;
+      if(losBlocked(camera.position,wp)) continue;
+      bestAngle=ang; best=t; bestDist=dist;
+    }
+  }
+  // keep current lock if still valid & within slightly larger angle (hysteresis)
+  if(lockedTarget && (!lockedTarget.alive || !targets.includes(lockedTarget))){ clearLock(); }
+  // manual tap-lock wins while fresh: prioritize the tapped target, keep validating LoS + range
+  if(manualLock && performance.now()<manualLockUntil && manualLock.alive && targets.includes(manualLock)){
+    const mp=manualLock.rig.group.position.clone(); mp.y=1.4;
+    if(mp.distanceTo(camera.position)<MAX_DIST && !losBlocked(camera.position,mp)){
+      if(lockedTarget!==manualLock){ lockedTarget=manualLock; SFX.lockOn(); }
+      else lockedTarget=manualLock;
+    }
+    else manualLock=null;
+  } else { if(manualLock && performance.now()>=manualLockUntil) manualLock=null;
+    if(best){
+      // STICKINESS: keep the current lock unless the challenger is clearly
+      // closer to the crosshair (3° margin) — stops flicker between two dummies.
+      if(lockedTarget && lockedTarget.alive && lockedTarget!==best){
+        const lp=lockedTarget.rig.group.position.clone(); lp.y=1.4;
+        const lto=lp.sub(camera.position); const ldist=lto.length();
+        const lang=aimDir.angleTo(lto.normalize());
+        const lockOk=ldist<MAX_DIST && lang<THREE.MathUtils.degToRad(MAX_ANGLE_DEG+6) && !losBlocked(camera.position,lockedTarget.rig.group.position.clone().setY(1.4));
+        if(lockOk && bestAngle>lang-THREE.MathUtils.degToRad(3)){ best=null; }
+      }
+      if(best){
+        if(lockedTarget!==best) SFX.lockOn();
+        lockedTarget=best;
+      }
+    }
+    else if(lockedTarget){ // validate still in range + LoS
+    const tp=lockedTarget.rig.group.position.clone(); tp.y=1.4;
+    const toT=tp.sub(camera.position); if(toT.length()>MAX_DIST||!lockedTarget.alive) clearLock();
+    else { const ang=aimDir.angleTo(toT.normalize()); if(ang>THREE.MathUtils.degToRad(MAX_ANGLE_DEG+6)) clearLock(); else if(losBlocked(camera.position,lockedTarget.rig.group.position.clone().setY(1.4))) clearLock(); }
+    }
+  }
+  if(lockedTarget){ const wp=lockedTarget.rig.group.position.clone(); wp.y=1.5; const s=worldToScreen(wp);
+    if(s.visible){
+      lockEl.style.display='block'; lockEl.style.left=s.x+'px'; lockEl.style.top=s.y+'px';
+      // readable + stable: scale slightly with distance so near/far locks stay legible
+      const d=camera.position.distanceTo(wp);
+      const sc=THREE.MathUtils.clamp(1.15-d*0.008,0.8,1.15);
+      lockEl.style.transform=`scale(${sc.toFixed(3)})`; lockEl.style.transformOrigin='center';
+    }
+    else lockEl.style.display='none';
+  } else lockEl.style.display='none';
+}
+function clearLock(){ lockedTarget=null; lockEl.style.display='none'; }
+
+/* ============ ANIMATION ============ */
+/* ============ PLAYER ANIMATION CONTROLLER ============
+   Layered priorities: base locomotion (idle/walk) → aim (spine+casting arm) →
+   action overlays (attack timeline, volley, laser, spin, flight). Each layer
+   only writes its own joints; every joint is damped toward its target, so no
+   snapping, twisting, or stuck poses. R6's locked mid-joints are never driven
+   (block-style whole-limb motion compensates); R15 uses full articulation. */
+function dampAxis(obj, axis, target, lambda, dt){ obj.rotation[axis]=THREE.MathUtils.damp(obj.rotation[axis], target, lambda, dt); }
+function sstep(a,b,x){ const t=THREE.MathUtils.clamp((x-a)/(b-a),0,1); return t*t*(3-2*t); }
+// Capability-aware joint appliers: identical calls work on R6 and R15.
+function solveArm(r,arm,tx,tz,te,dt){
+  const boost=r.type==='r6'?1.12:1.0; // R6 block limbs swing a touch wider
+  dampAxis(arm.sh,'x',tx*boost,14,dt);
+  dampAxis(arm.sh,'z',tz,10,dt);
+  dampAxis(arm.el,'x',r.caps.elbows?te:0,14,dt);
+}
+function solveLeg(r,leg,tx,tk,tf,dt){
+  dampAxis(leg.hp,'x',tx,14,dt);
+  dampAxis(leg.kn,'x',r.caps.knees?tk:0,14,dt);
+  dampAxis(leg.ft,'x',r.caps.knees?tf:tx*0.4,14,dt);
+}
+function pokePlayer(s=1){ player.recoil=Math.min(1,player.recoil+s); } // hit-reaction impulse
+const _mvF=new THREE.Vector3(), _mvR=new THREE.Vector3(), _move=new THREE.Vector3();
+const _footL=new THREE.Vector3(), _footR=new THREE.Vector3();
+/* ============ PLAYER ANIMATION CONTROLLER ============
+   Split responsibilities:
+     • updatePlayerPhysics  — gravity / jump / landing (vertical sim)
+     • animatePlayer        — locomotion integration + procedural posing
+   Posing is layered with explicit blend weights (ground → aim → action →
+   air), each weight damped so every transition cross-fades instead of
+   snapping. R6's mid-joints stay locked via rig.caps; R15 uses full
+   articulation. After posing, foot planting compensates root height so the
+   lower foot never floats or sinks while grounded. */
+function groundControl(dt){
+  const lasing=AB.laser.holding;
+  const spinning=AB.spin.t>0;
+  const accel=player.grounded?14:8; // snappy ground response, lighter air control
+  const moveScale=player.grounded?1:0.72;
+  // Keyboard override (desktop validation) merges with joystick when stick idle
+  const kx=(keys.d?1:0)-(keys.a?1:0), ky=(keys.s?1:0)-(keys.w?1:0);
+  let jx=joy.x, jy=joy.y;
+  if(Math.hypot(jx,jy)<0.15 && (kx||ky)){ jx=kx; jy=ky; }
+  _move.set(0,0,0);
+  if(player.moving){
+    const cy=Math.cos(camYaw), sy=Math.sin(camYaw);
+    _mvF.set(sy,0,cy);
+    if(_mvF.lengthSq()<1e-4) _mvF.set(Math.sin(player.yaw),0,Math.cos(player.yaw));
+    _mvF.normalize();
+    _mvR.set(-_mvF.z,0,_mvF.x);
+    _move.addScaledVector(_mvF,-jy).addScaledVector(_mvR,jx);
+    if(_move.lengthSq()>1) _move.normalize();
+    const effSpeed=player.speed*(lasing?0.8:1)*moveScale;
+    _move.multiplyScalar(effSpeed);
+  }
+  player.vel.x=THREE.MathUtils.damp(player.vel.x,_move.x,accel,dt);
+  player.vel.z=THREE.MathUtils.damp(player.vel.z,_move.z,accel,dt);
+  player.pos.addScaledVector(player.vel,dt);
+  clampToArena(player.pos,1.5);
+  collideObstacles(player.pos,player.flyH);
+  const spd=player.vel.length();
+  // STRAFE AIM-FACING (Marvel-Rivals feel): while firing the beam, mid-attack,
+  // or strafing with a live lock, face the aim — never the movement direction.
+  // Otherwise face travel direction. Spin owns the whole body so it is excluded.
+  const hasLock=(typeof lockedTarget!=='undefined' && lockedTarget && lockedTarget.alive);
+  const strafing=!spinning && (lasing || player.atkT>0 || (hasLock && player.moving));
+  if(strafing){
+    let targetYaw=camYaw;
+    if(hasLock){ const tp=lockedTarget.rig.group.position; targetYaw=Math.atan2(tp.x-player.pos.x,tp.z-player.pos.z); }
+    let d=targetYaw-player.yaw; while(d>Math.PI)d-=Math.PI*2; while(d<-Math.PI)d+=Math.PI*2;
+    player.yaw+=d*Math.min(1,dt*13); // immediate but smooth — no snap
+    player.turnVel=THREE.MathUtils.damp(player.turnVel||0,THREE.MathUtils.clamp(d*5,-1.0,1.0),9,dt);
+  } else if(spd>1 && !spinning){
+    const targetYaw=Math.atan2(player.vel.x,player.vel.z);
+    let d=targetYaw-player.yaw; while(d>Math.PI)d-=Math.PI*2; while(d<-Math.PI)d+=Math.PI*2;
+    player.yaw+=d*Math.min(1,dt*(9+spd)); // snappier turn at speed, smooth at rest
+    player.turnVel=THREE.MathUtils.damp(player.turnVel||0,THREE.MathUtils.clamp(d*6,-1.2,1.2),8,dt); // bank into turns
+  } else if(!player.moving){
+    player.turnVel=THREE.MathUtils.damp(player.turnVel||0,0,8,dt);
+  }
+  if(player.grounded){
+    player.walkPhase+=dt*(4+spd*1.1); // stride rate follows real ground speed
+    const si=Math.floor(player.walkPhase/Math.PI);
+    if(si!==player.stepIdx){ player.stepIdx=si; if(spd>2.5) SFX.step(); }
+  } else {
+    player.turnVel=THREE.MathUtils.damp(player.turnVel||0,0,6,dt);
+  }
+  return spd;
+}
+function groundFlightControl(dt){
+  // Flight translation is owned by updateFlight() (called later in the loop).
+  // This only keeps yaw/bank in sync so we never double-integrate position.
+  const spd=Math.hypot(player.fvel.x,player.fvel.z);
+  if(spd>1){
+    const targetYaw=Math.atan2(player.fvel.x,player.fvel.z);
+    let d=targetYaw-player.yaw; while(d>Math.PI)d-=Math.PI*2; while(d<-Math.PI)d+=Math.PI*2;
+    player.yaw+=d*Math.min(1,dt*6);
+    player.turnVel=THREE.MathUtils.damp(player.turnVel||0,THREE.MathUtils.clamp(d*6,-1.2,1.2),8,dt);
+  }
+  return spd;
+}
+function animatePlayer(dt,time){
+  const r=playerRig;
+  const mv=Math.hypot(joy.x,joy.y);
+  const kmv=(keys.w||keys.a||keys.s||keys.d)?1:0;
+  player.moving=mv>0.15||kmv>0;
+  const spinning=AB.spin.t>0, lasing=AB.laser.holding;
+  if(!spinning && player.spinAngle!==0){ // unwind spin offset after spin ends (never stuck twisted)
+    const twoPi=Math.PI*2;
+    player.spinAngle=THREE.MathUtils.damp(player.spinAngle,Math.round(player.spinAngle/twoPi)*twoPi,8,dt);
+    if(Math.abs(player.spinAngle)<0.01) player.spinAngle=0;
+  }
+  if(player.flying) groundFlightControl(dt); else groundControl(dt);
+  r.group.position.copy(player.pos);
+  r.group.rotation.set(0,player.yaw+player.spinAngle,0);
+  playerBlob.position.set(player.pos.x,0.02,player.pos.z);
+  // blob shrinks/fades with altitude
+  const blobS=1+player.flyH*0.04;
+  playerBlob.scale.set(blobS,blobS,1);
+  playerBlob.material.opacity=Q().blob*Math.max(0.25,1-player.flyH*0.04);
+
+  // ---- blend weights (damped: every transition cross-fades) ----
+  const spdNow=player.flying?Math.hypot(player.fvel.x,player.fvel.z):player.vel.length();
+  const strideMix=THREE.MathUtils.clamp(spdNow/3,0,1);
+  player.wStride=THREE.MathUtils.damp(player.wStride||0, player.grounded?strideMix:0, 11, dt);
+  player.wAir=THREE.MathUtils.damp(player.wAir||0, (!player.grounded&&!player.flying)?1:0, 12, dt);
+  player.wLand=THREE.MathUtils.damp(player.wLand||0, player.landT>0?THREE.MathUtils.clamp(player.landT,0,1):0, 9, dt);
+  player.wSpin=THREE.MathUtils.damp(player.wSpin||0, spinning?1:0, 13, dt);
+  player.wLaser=THREE.MathUtils.damp(player.wLaser||0, lasing?1:0, 14, dt);
+  player.wFly=THREE.MathUtils.damp(player.wFly||0, player.flying?1:0, 9, dt);
+  player.wVolley=THREE.MathUtils.damp(player.wVolley||0, player.volleyPose>0?1:0, 16, dt);
+  const wStride=player.wStride, wAir=player.wAir, wLand=player.wLand;
+  const wSpin=player.wSpin, wLaser=player.wLaser, wFly=player.wFly, wVolley=player.wVolley;
+
+  // ---- attack timeline (anticipation -> release -> recover) ----
+  let wind=0, thrust=0;
+  if(player.atkT>0){
+    player.atkT=Math.max(0,player.atkT-dt);
+    const phase=ATK_DUR-player.atkT;
+    if(player.pendingShot && phase>=ATK_ANTICIP){ player.pendingShot=false; releaseShot(); }
+    wind = phase<ATK_ANTICIP ? sstep(0,ATK_ANTICIP,phase) : Math.max(0,1-(phase-ATK_ANTICIP)/0.15);
+    thrust = phase<ATK_ANTICIP ? 0 : Math.exp(-(phase-ATK_ANTICIP)*7);
+    if(player.atkT<=0) player.pendingShot=false;
+  }
+  // ---- hit-reaction decay (brief recoil, always recovers) ----
+  if(player.recoil>0) player.recoil=Math.max(0,player.recoil-dt*3);
+
+  // ---- locomotion pose targets ----
+  const swing=Math.sin(player.walkPhase)*0.6;
+  const breath=Math.sin(time*2.2);
+  const strafeLean=player.moving?THREE.MathUtils.clamp(-joy.x*0.5,-0.4,0.4):0; // body weight shift
+  // vertical aim: upper body + casting arm follow camera pitch, clamped so joints never break
+  const aimSpine=THREE.MathUtils.clamp(camPitch*0.16,-0.28,0.32);
+  const aimArm=THREE.MathUtils.clamp(-0.55-camPitch*0.45,-2.3,0.4);
+
+  // jump/air/land vertical blends
+  const jumpRise=THREE.MathUtils.clamp(player.vy/6,-1,1);   // -1 rising, 1 falling
+  const jumpTuck=THREE.MathUtils.clamp(player.jumpT/0.28,0,1);
+  const landSquat=wLand*THREE.MathUtils.clamp(player.landT,0,1);
+
+  // hip height: ground bob + airborne tuck + landing squat, blended
+  const groundHip=(Math.abs(Math.sin(player.walkPhase))*0.05*wStride+idleBob0(breath)*(1-wStride))
+    -0.05*wind+0.02*thrust-player.recoil*0.03-0.09*jumpTuck*wAir-0.24*landSquat;
+  const hipsY=HIP_H+groundHip+0.06*wAir;
+  r.hips.position.y=THREE.MathUtils.damp(r.hips.position.y,hipsY,12,dt);
+  r.hips.position.x=THREE.MathUtils.damp(r.hips.position.x,strafeLean*0.12,8,dt);
+  // hips twist into stride (counter to shoulders) — core body movement, not part sliding
+  dampAxis(r.hips,'y',(-swing*0.22*wStride)-0.02*wAir,10,dt);
+  dampAxis(r.hips,'z',(player.turnVel||0)*0.16,8,dt);
+
+  // legs: walk cycle blends with airborne tuck and landing recovery
+  const kneeLg=Math.max(0,-Math.sin(player.walkPhase))*1.0*wStride+0.06*(1-wStride);
+  const kneeRg=Math.max(0,Math.sin(player.walkPhase))*1.0*wStride+0.06*(1-wStride);
+  // airborne: front knee tucks on rise, trailing leg extends on fall
+  const airHipL=THREE.MathUtils.clamp(-0.35-0.5*jumpTuck-0.35*jumpRise,-1.3,0.5);
+  const airHipR=THREE.MathUtils.clamp(-0.15+0.25*jumpRise,-0.6,0.9);
+  const airKneeL=THREE.MathUtils.clamp(0.75+0.5*jumpTuck+0.25*jumpRise,0.1,1.7);
+  const airKneeR=THREE.MathUtils.clamp(0.28-0.35*jumpRise,0.05,1.2);
+  const landHip=-0.55*landSquat, landKnee=0.95*landSquat;
+  const hipLT=swing*(1-wAir)*(1-wLand)+airHipL*wAir+landHip*wLand-0.55*wFly;
+  const hipRT=-swing*(1-wAir)*(1-wLand)+airHipR*wAir+landHip*wLand-0.55*wFly;
+  const kneeL=kneeLg*(1-wAir)*(1-wLand)+airKneeL*wAir+landKnee*wLand+0.35*wFly;
+  const kneeR=kneeRg*(1-wAir)*(1-wLand)+airKneeR*wAir+landKnee*wLand+0.35*wFly;
+  solveLeg(r,r.legL,hipLT,kneeL,-(swing*0.6+kneeL)*0.5,dt);
+  solveLeg(r,r.legR,hipRT,kneeR,-(-swing*0.6+kneeR)*0.5,dt);
+
+  // spine / head — flight lean overrides aim lean; recoil adds a brief kick
+  const lean=(player.moving?0.07:-0.01+breath*0.012)*wStride;
+  const climbLean=wFly>0.1?THREE.MathUtils.clamp(player.flyV*0.03,-0.12,0.2):0;
+  const spineXT=(lean+aimSpine*0.5)*(1-wFly)-player.recoil*0.20-0.08*wSpin+0.12*Math.sin(player.volleyPose>0?(0.6-player.volleyPose)/0.6*Math.PI:0)+climbLean+0.06*wAir+0.35*landSquat;
+  dampAxis(r.spine,'x',spineXT,10,dt);
+  dampAxis(r.spine,'y',-0.28*wind+0.32*thrust+(swing*0.16*wStride),12,dt);
+  dampAxis(r.spine,'z',THREE.MathUtils.clamp(-strafeLean*0.4-(player.turnVel||0)*0.15,-0.3,0.3),8,dt); // bank + sway
+  dampAxis(r.headM,'y',Math.sin(player.walkPhase*0.5)*0.08*wStride+Math.sin(time*0.9)*0.1*(1-wStride),8,dt);
+  dampAxis(r.headM,'x',wFly>0.5?-0.85:THREE.MathUtils.clamp(-camPitch*0.15,-0.22,0.22),8,dt);
+
+  // arms: support arm counter-swings in walk; casting arm tracks aim + overlays
+  const supArm=-swing*0.6*wStride+breath*0.05*(1-wStride);
+  const castArm=aimArm+swing*0.15*wStride+0.45*wind-1.15*thrust;
+  const castEl=THREE.MathUtils.clamp(-0.30-0.45*wind+0.24*thrust,-1.9,-0.08);
+  if(player.volleyPose>0) player.volleyPose=Math.max(0,player.volleyPose-dt);
+  // per-layer arm targets, then weighted blend (no layer ever fights another)
+  const spinSh=-1.5, spinZ=1.1, spinEl=-0.25;
+  const lasSh=castArm-0.15, lasZ=0.35, lasEl=-0.15;
+  const flySh=0.9, flyZ=0.35, flyEl=-0.15;
+  const airShX=THREE.MathUtils.clamp(-0.5+0.7*jumpRise,-1.1,0.9), airShZ=0.5, airEl=-0.2;
+  const groundShX=castArm, groundShZ=-0.12, groundEl=castEl;
+  const launchLift=wVolley>0.05?-0.9*wVolley:0;
+  const armR_shX=(spinSh*wSpin+lasSh*wLaser+flySh*wFly+airShX*wAir+groundShX*(1-wSpin-wLaser-wFly-wAir)+launchLift);
+  const armR_shZ=(spinZ*wSpin-lasZ*wLaser-flyZ*wFly+airShZ*wAir+groundShZ*(1-wSpin-wLaser-wFly-wAir));
+  const armR_el=(spinEl*wSpin+lasEl*wLaser+flyEl*wFly+airEl*wAir+groundEl*(1-wSpin-wLaser-wFly-wAir));
+  solveArm(r,r.armR,armR_shX,armR_shZ,armR_el,dt);
+  // support arm mirrors (spread out in spin/air, forward in laser, back in flight)
+  const sup_shX=(spinSh*wSpin+lasSh*wLaser+flySh*wFly+(airShX+0.1)*wAir+(supArm+0.20*thrust)*(1-wSpin-wLaser-wFly-wAir)+launchLift*0.6);
+  const sup_shZ=(-spinZ*wSpin+lasZ*wLaser-flyZ*wFly+airShZ*wAir+0.12*(1-wSpin-wLaser-wFly-wAir));
+  const sup_el=(spinEl*wSpin+lasEl*wLaser+flyEl*wFly+airEl*wAir-0.40*(1-wSpin-wLaser-wFly-wAir));
+  solveArm(r,r.armL,sup_shX,sup_shZ,sup_el,dt);
+
+  // ---- FOOT PLANTING: root-height compensation so the lower foot never
+  // floats or sinks while grounded (works for R6 and R15, no IK needed) ----
+  if(r.caps.knees){
+    r.legL.ft.getWorldPosition(_footL);
+    r.legR.ft.getWorldPosition(_footR);
+    const lowest=Math.min(_footL.y,_footR.y);
+    if(player.grounded){
+      footFixY=THREE.MathUtils.damp(footFixY||0,-lowest,16,dt);
+      r.group.position.y=player.flyH+footFixY;
+    } else {
+      footFixY=THREE.MathUtils.damp(footFixY||0,0,8,dt);
+      r.group.position.y=player.flyH;
+    }
+  } else {
+    r.group.position.y=player.flyH; // R6: block legs carry fixed offsets
+  }
+}
+let footFixY=0;
+function idleBob0(b){ return b*0.022; }
+function animateTargets(dt,time){
+  for(const t of targets){
+    const g=t.rig.group;
+    // blob shadow follows x/z, stays flat on the ground
+    t.blob.position.set(g.position.x,0.02,g.position.z);
+    // hide blob while fallen, fade back on respawn
+    t.blob.material.opacity=(t.alive?QUALITY[Settings.quality].blob:0);
+    if(!t.alive){ // fallen: lie back while awaiting respawn
+      g.rotation.x=THREE.MathUtils.damp(g.rotation.x,-Math.PI/2.3,6,dt);
+      g.position.y=THREE.MathUtils.damp(g.position.y,0.25,6,dt);
+      continue;
+    }
+    // brief ragdoll tumble (stage-3 blast): recovers safely, never breaks respawn
+    if(t.ragdollT>0){
+      t.ragdollT-=dt;
+      g.rotation.z=THREE.MathUtils.damp(g.rotation.z,0.9,4,dt);
+      g.rotation.x=THREE.MathUtils.damp(g.rotation.x,-0.5,4,dt);
+      g.position.y=Math.max(g.position.y,0.35+t.ragdollT*0.5);
+      if(t.ragdollT<=0){ g.rotation.z=0; g.rotation.x=0; }
+      t.hb.grp.lookAt(camera.position);
+      continue;
+    }
+    // idle sway (upper body only — legs are root-fixed so feet stay planted)
+    t.rig.hips.position.y=THREE.MathUtils.damp(t.rig.hips.position.y,HIP_H+Math.sin(time*2+g.position.x)*0.02,8,dt);
+    t.rig.armL.sh.rotation.x=Math.sin(time*1.8+g.position.z)*0.07;
+    t.rig.armR.sh.rotation.x=-Math.sin(time*1.8+g.position.z)*0.07;
+    t.rig.armL.el.rotation.x=-0.35; t.rig.armR.el.rotation.x=-0.35;
+    // hit flash decay, fully reset emissive at the end
+    if(t.flash>0){
+      t.flash=Math.max(0,t.flash-dt*4);
+      const f=t.flash;
+      t.rig.group.traverse(o=>{ if(o.isMesh&&o.material.emissive!==undefined){ if(f<=0){ o.material.emissive.setRGB(0,0,0); o.material.emissiveIntensity=0; } else { o.material.emissive.setRGB(f*0.9,f*0.08,f*0.08); o.material.emissiveIntensity=f; } } });
+    }
+    // recoil: lean back quickly, then ease back to standing
+    if(t.recoil>0){ t.recoil=Math.max(0,t.recoil-dt*2.2); }
+    g.rotation.x=THREE.MathUtils.damp(g.rotation.x,-t.recoil*0.45,18,dt);
+    g.position.y=THREE.MathUtils.damp(g.position.y,t.recoil*0.15,18,dt);
+    // healthbar billboard (true world-space facing, compensates parent lean)
+    t.hb.grp.lookAt(camera.position);
+  }
+}
+
+/* ============ CAMERA (free-look + floor/wall collision) ============ */
+let smoothCamDist=6.2;
+const _camDir=new THREE.Vector3(), _camWant=new THREE.Vector3(), _camPivot=new THREE.Vector3(), _camHit=new THREE.Vector3();
+const _camRay=new THREE.Raycaster();
+function updateCamera(dt){
+  const px=player.pos.x, py=1.7+player.flyH, pz=player.pos.z;
+  // AERIAL FRAMING: rise + pull back slightly with altitude so dives, hover
+  // strafes and volley arcs stay readable. Ground framing is untouched.
+  const altK=THREE.MathUtils.clamp(player.flyH/FLY_MAX_H,0,1);
+  const frameDist=camDist+altK*1.4;
+  _camPivot.set(px,py+0.3+altK*0.5,pz);
+  const cx=px - Math.sin(camYaw)*Math.cos(camPitch)*frameDist;
+  const cz=pz - Math.cos(camYaw)*Math.cos(camPitch)*frameDist;
+  const cy=py + Math.sin(camPitch)*frameDist + 0.6;
+  _camWant.set(cx,cy,cz);
+  // collision: pull in when floor or curb blocks the view (never clip through)
+  _camDir.copy(_camWant).sub(_camPivot);
+  let wantDist=_camDir.length();
+  _camDir.normalize();
+  let blockedDist=wantDist;
+  _camRay.set(_camPivot,_camDir); _camRay.far=wantDist;
+  const hits=_camRay.intersectObjects(camOccluders,false);
+  if(hits.length) blockedDist=Math.min(blockedDist,hits[0].distance-0.4);
+  // floor plane: keep camera above ground
+  if(_camDir.y<-0.001){
+    const t=(0.45-_camPivot.y)/_camDir.y;
+    if(t>0&&t<blockedDist) blockedDist=t;
+  }
+  blockedDist=Math.max(1.4,Math.min(wantDist,blockedDist));
+  smoothCamDist=THREE.MathUtils.damp(smoothCamDist,blockedDist,10,dt);
+  camera.position.copy(_camPivot).addScaledVector(_camDir,smoothCamDist);
+  if(camera.position.y<0.4) camera.position.y=0.4;
+  // combat feedback offsets (shake + directional kick), applied post-collision
+  let sx=0,sy=0;
+  if(shakeT>0){ shakeT-=dt; const s=shakeAmp*(shakeT>0?shakeT/0.22:0); sx=(Math.random()-0.5)*s; sy=(Math.random()-0.5)*s; if(shakeT<=0) shakeAmp=0; }
+  if(kickAmt>0.001){ camera.position.addScaledVector(_camDir,kickAmt); kickAmt*=Math.exp(-9*dt); }
+  else kickAmt=0;
+  camera.position.x+=sx; camera.position.y+=sy;
+  if(camera.position.y<0.35) camera.position.y=0.35;
+  // hard safety: combat offsets can never leave the valid camera volume
+  camera.position.x=THREE.MathUtils.clamp(camera.position.x,-ARENA/2-1,ARENA/2+1);
+  camera.position.z=THREE.MathUtils.clamp(camera.position.z,-ARENA/2-1,ARENA/2+1);
+  camera.lookAt(_camPivot);
+}
+
+/* ============ SETTINGS UI ============ */
+const $=id=>document.getElementById(id);
+function toast(msg){ const t=$('toast'); t.textContent=msg; t.style.display='block'; clearTimeout(t._h); t._h=setTimeout(()=>t.style.display='none',1400); }
+/* Hitmarker + reticle pulse: immediate hit confirmation at the aim point.
+   Light ticks flash the reticle; kills add the red X. Never blocks the view. */
+function pulseHitmarker(kill=false){
+  const h=$('hitmarker'); if(h){ h.classList.add('show'); h.classList.toggle('kill',!!kill);
+    clearTimeout(h._h); h._h=setTimeout(()=>h.classList.remove('show'), kill?220:120); }
+  const r=$('reticle'); if(r){ r.classList.add('hit'); clearTimeout(r._h); r._h=setTimeout(()=>r.classList.remove('hit'),110); }
+}
+$('settings-btn').onclick=()=>{ ensureAudio(); SFX.ui(); $('settings-panel').classList.toggle('open'); };
+$('close-settings').onclick=()=>{ SFX.ui(); $('settings-panel').classList.remove('open'); };
+$('s-targets').oninput=e=>{ const n=+e.target.value; Settings.targetCount=n; syncTargetCount(n); };
+$('t-aim').onclick=e=>{ Settings.aimAssist=!Settings.aimAssist; e.target.classList.toggle('on',Settings.aimAssist); if(!Settings.aimAssist) clearLock(); SFX.ui(); };
+$('s-sens').oninput=e=>{ Settings.sensitivity=+e.target.value; $('v-sens').textContent=(+e.target.value).toFixed(1); };
+$('reset-sens').onclick=()=>{ Settings.sensitivity=DEFAULT_SENS; $('s-sens').value=DEFAULT_SENS; $('v-sens').textContent=DEFAULT_SENS.toFixed(1); SFX.ui(); toast('Sensitivity reset'); };
+$('s-vol').oninput=e=>{ const v=+e.target.value/100; setVolume(v); $('v-vol').textContent=e.target.value+'%'; };
+$('t-shake').onclick=e=>{ Settings.shake=!Settings.shake; e.target.classList.toggle('on',Settings.shake); SFX.ui(); };
+document.querySelectorAll('.qbtns button').forEach(b=>b.onclick=()=>{ Settings.quality=b.dataset.q; applyQuality(); SFX.ui(); toast('Graphics: '+b.dataset.q.toUpperCase()); });
+document.querySelectorAll('.seg.aimseg button').forEach(b=>b.onclick=()=>{ Settings.aimingMode=b.dataset.aim; document.querySelectorAll('.seg.aimseg button').forEach(x=>x.classList.toggle('active',x===b)); layoutReticle(); SFX.ui(); });
+document.querySelectorAll('.seg.rigseg button').forEach(b=>b.onclick=()=>{ setRigType(b.dataset.rig); });
+document.querySelectorAll('.seg.rigseg button').forEach(x=>x.classList.toggle('active',x.dataset.rig===Settings.rigType));
+function updateCombatDisabled(){ // abilities need IRONMAN; attack always live
+  const dis=Settings.character!=='ironman';
+  abBtns.forEach(b=>b.classList.toggle('disabled',dis));
+}
+function openCharPanel(open){ const p=document.getElementById('char-panel'); if(open===undefined) p.classList.toggle('open'); else p.classList.toggle('open',!!open); }
+$('char-btn').onclick=()=>{ ensureAudio(); SFX.ui(); const p=$('char-panel'); p.classList.toggle('open'); };
+$('char-select').onclick=()=>{
+  ensureAudio(); SFX.ui();
+  Settings.character='ironman';
+  respawnPlayer(); // safe respawn, same rig, camera + controls untouched
+  updateCombatDisabled();
+  $('char-select').textContent='✓ IRONMAN ACTIVE';
+  $('char-select').classList.add('selected');
+  $('char-panel').classList.remove('open');
+  toast('IRONMAN READY');
+};
+function goFullscreen(){ ensureAudio(); const el=document.documentElement; try{ if(el.requestFullscreen) el.requestFullscreen(); }catch(e){} try{ if(screen.orientation&&screen.orientation.lock) screen.orientation.lock('landscape').catch(()=>{}); }catch(e){} }
+$('fs-btn').onclick=goFullscreen;
+document.getElementById('fs-btn2').onclick=goFullscreen;
+addEventListener('resize',()=>{ camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth,innerHeight); });
+addEventListener('contextmenu',e=>e.preventDefault());
+document.addEventListener('dblclick',e=>e.preventDefault());
+
+/* ============ MAIN LOOP ============ */
+applyQuality();
+layoutReticle();
+updateCombatDisabled();
+setVolume(Settings.volume);
+const clock=new THREE.Clock();
+function loop(){
+  requestAnimationFrame(loop);
+  const dt=Math.min(clock.getDelta(),0.05);
+  const t=clock.elapsedTime;
+  // hit-stop: world slows for an instant on heavy impacts; input+camera stay realtime
+  const wdt=hitStopT>0?dt*0.2:dt;
+  if(hitStopT>0){ hitStopT-=dt; setStopMix(true); } else if(_wasStopped){ setStopMix(false); _wasStopped=false; }
+  if(hitStopT>0) _wasStopped=true;
+  // combo idle reset keeps stage tracking consistent (never skips from stale state)
+  if(player.combo!==0){ player.comboIdle+=dt; if(player.comboIdle>activeKit().combo.resetTime){ player.combo=0; player.comboIdle=0; } }
+  // buffered attack: queued tap fires the moment recovery/cooldown clears
+  if(atkBuffer>0){ atkBuffer-=dt; if(atkBuffer<=0){ atkBuffer=0; } else if(atkTimer<=0 && player.atkT<=0){ atkBuffer=0; atkTimer=activeKit().combo.cd; player.atkT=ATK_DUR; player.pendingShot=true; } }
+  updatePlayerPhysics(dt);
+  animatePlayer(wdt,t);
+  animateTargets(wdt,t);
+  updateRespawns(wdt);
+  updateBurning(wdt,t);
+  updateObstacles(wdt); // crate respawn timers
+  updateCamera(dt);
+  updateAimAssist();
+  updateProjectiles(wdt);
+  updateVolley(wdt);
+  updateSpin(wdt);
+  updateLaser(wdt);
+  updateFlight(wdt);
+  if(player.landing && !player.flying){ // touchdown glide after flight ends
+    player.flyH=THREE.MathUtils.damp(player.flyH,0,6,wdt);
+    if(player.flyH<0.05){ player.flyH=0; player.landing=false; SFX.touchdown(); camKick(0.08); }
+  }
+  updateBeams(wdt);
+  if(boomLightT>0){ boomLightT-=wdt; if(boomLightT<=0) boomLight.intensity=0; }
+  updateExplosions(wdt);
+  updateCooldownUI(dt);
+  updateDamageNumbers(wdt);
+  updateScreenFlash(dt);
+  renderer.render(scene,camera);
+}
+loop();
+</script>
+</body>
+</html>
