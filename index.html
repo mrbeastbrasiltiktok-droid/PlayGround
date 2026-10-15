@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>RIVALS ARENA — Mobile Hero Shooter</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>⚔</text></svg>">
+<link rel="stylesheet" href="css/style.css?v=3">
+<script type="importmap">{"imports":{"three":"./vendor/three.module.js"}}</script>
+</head>
+<body>
+<div id="app">
+  <canvas id="game-canvas"></canvas>
+  <!-- Loading -->
+  <div id="loading-screen" class="screen visible">
+    <div class="load-logo"><span class="load-logo-a">RIVALS</span><span class="load-logo-b">ARENA</span></div>
+    <div class="load-bar-wrap"><div id="load-bar" class="load-bar"></div></div>
+    <div id="load-status" class="load-status">Initializing engine…</div>
+  </div>
+  <!-- Intro -->
+  <div id="intro-screen" class="screen">
+    <div class="intro-title"><span>RIVALS</span><em>ARENA</em></div>
+    <div class="intro-sub">A 3V3 HERO OBJECTIVE SHOOTER</div>
+    <div class="intro-lore">Six heroes. One convergence point. Hold the line.</div>
+    <button id="btn-intro-skip" class="btn ghost">SKIP ▸</button>
+    <button id="btn-intro-start" class="btn primary big">▶ &nbsp;TAP TO START</button>
+  </div>
+  <!-- Main menu -->
+  <div id="menu-screen" class="screen">
+    <div class="menu-top">
+      <div class="game-logo"><span>RIVALS</span><em>ARENA</em></div>
+      <div class="menu-season">SEASON 01 // CONVERGENCE</div>
+    </div>
+    <div class="menu-heroes-strip" id="menu-hero-strip"></div>
+    <nav class="menu-nav">
+      <button id="btn-play" class="btn primary big">⚔ &nbsp;PLAY</button>
+      <div class="menu-row">
+        <button id="btn-gallery" class="btn">◈ GALLERY</button>
+        <button id="btn-training" class="btn">◎ TRAINING</button>
+      </div>
+      <div class="menu-row">
+        <button id="btn-settings" class="btn">⚙ SETTINGS</button>
+        <button id="btn-how" class="btn">? HOW TO PLAY</button>
+      </div>
+    </nav>
+    <div class="menu-footer">
+      <div class="menu-profile"><div class="avatar">★</div><div><b>COMMANDER</b><small>LV 12 • PLAT II</small></div></div>
+      <div class="menu-ver">v1.0 • 60 FPS TARGET • TOUCH READY</div>
+    </div>
+  </div>
+  <!-- Mode select -->
+  <div id="mode-screen" class="screen">
+    <header class="scr-head"><button class="btn back" data-back>‹</button><h2>GAME MODE</h2></header>
+    <div class="mode-list">
+      <button class="mode-card" data-mode="control"><b>◉ CONVERGENCE</b><span>Capture &amp; hold the central point. First to 100% wins.</span><i>3v3 • ARENA: SKYFALL PLAZA</i></button>
+      <button class="mode-card" data-mode="tdm"><b>✛ TEAM CLASH</b><span>Eliminate the enemy team. First to 30 takedowns wins.</span><i>3v3 • ARENA: SKYFALL PLAZA</i></button>
+      <button class="mode-card" data-mode="training"><b>◎ TRAINING RANGE</b><span>Free roam. Practice abilities on target bots.</span><i>SOLO • NO TIMER</i></button>
+    </div>
+  </div>
+  <!-- Hero select -->
+  <div id="select-screen" class="screen">
+    <header class="scr-head"><button class="btn back" data-back>‹</button><h2>CHOOSE YOUR HERO</h2><div id="select-timer" class="select-timer">20</div></header>
+    <div class="select-main">
+      <div class="select-stage"><canvas id="select-canvas"></canvas><div id="select-name" class="select-name">AEGIS</div><div id="select-role" class="select-role">VANGUARD</div></div>
+      <div class="select-side">
+        <p id="select-desc" class="select-desc"></p>
+        <div id="select-abilities" class="select-abilities"></div>
+        <div class="diff-row">DIFFICULTY <span id="select-diff"></span></div>
+      </div>
+    </div>
+    <div id="hero-grid" class="hero-grid"></div>
+    <div class="select-foot">
+      <div id="team-preview" class="team-preview"></div>
+      <button id="btn-lock" class="btn primary big">LOCK IN ⚔</button>
+    </div>
+  </div>
+  <!-- Gallery -->
+  <div id="gallery-screen" class="screen">
+    <header class="scr-head"><button class="btn back" data-back>‹</button><h2>HERO GALLERY</h2></header>
+    <div class="gal-main"><canvas id="gallery-canvas"></canvas>
+      <div class="gal-info"><h3 id="gal-name"></h3><p id="gal-story"></p><div id="gal-stats" class="gal-stats"></div></div>
+    </div>
+    <div id="gal-grid" class="hero-grid small"></div>
+  </div>
+  <!-- How to -->
+  <div id="how-screen" class="screen">
+    <header class="scr-head"><button class="btn back" data-back>‹</button><h2>HOW TO PLAY</h2></header>
+    <div class="how-body">
+      <div class="how-card"><b>MOVE</b><span>Left stick to move. Drag right side to aim camera.</span></div>
+      <div class="how-card"><b>FIGHT</b><span>FIRE = primary. Buttons E / SHIFT = abilities. ULT glows when charged (100%).</span></div>
+      <div class="how-card"><b>OBJECTIVE ◉</b><span>Stand inside the glowing ring to capture. More teammates = faster. Defend it!</span></div>
+      <div class="how-card"><b>SURVIVE</b><span>Low HP? Retreat behind cover — Strategists heal. You respawn after 4s.</span></div>
+      <div class="how-card"><b>KEYBOARD</b><span>WASD move • Mouse aim • LMB fire • E/Q/Shift abilities • F ult • Space jump</span></div>
+    </div>
+  </div>
+  <!-- Settings -->
+  <div id="settings-screen" class="screen">
+    <header class="scr-head"><button class="btn back" data-back>‹</button><h2>SETTINGS</h2></header>
+    <div class="set-body">
+      <label>SENSITIVITY <input id="set-sens" type="range" min="0.3" max="3" step="0.1" value="1.2"><b id="set-sens-v">1.2</b></label>
+      <label>AIM ASSIST <input id="set-aim" type="checkbox" checked></label>
+      <label>BUTTON SIZE <input id="set-btnsize" type="range" min="0.8" max="1.4" step="0.05" value="1"><b id="set-btnsize-v">1.0</b></label>
+      <label>BUTTON OPACITY <input id="set-opacity" type="range" min="0.4" max="1" step="0.05" value="0.9"><b id="set-opacity-v">0.9</b></label>
+      <label>QUALITY <select id="set-quality"><option value="low">LOW</option><option value="med" selected>MEDIUM</option><option value="high">HIGH</option></select></label>
+      <label>MUSIC <input id="set-music" type="range" min="0" max="1" step="0.05" value="0.5"></label>
+      <label>SFX <input id="set-sfx" type="range" min="0" max="1" step="0.05" value="0.8"></label>
+      <label>SHAKE <input id="set-shake" type="checkbox" checked></label>
+    </div>
+  </div>
+  <!-- Countdown -->
+  <div id="count-screen" class="count"><div id="count-num">3</div><div id="count-sub">CAPTURE THE POINT</div></div>
+  <!-- HUD -->
+  <div id="hud" class="hud">
+    <div class="hud-top">
+      <div id="hud-score-a" class="hud-team a">0</div>
+      <div class="hud-mid"><div id="hud-timer">6:00</div><div id="hud-obj">◉ 0%</div></div>
+      <div id="hud-score-b" class="hud-team b">0</div>
+      <button id="btn-pause" class="hud-icon">II</button>
+      <button id="btn-board" class="hud-icon">☰</button>
+    </div>
+    <div id="killfeed" class="killfeed"></div>
+    <div id="hitmarker" class="hitmarker">✕</div>
+    <div id="dmg-vignette" class="dmg-vignette"></div>
+    <div id="heal-vignette" class="heal-vignette"></div>
+    <div id="obj-marker" class="obj-marker">◉ <b id="obj-dist">0m</b></div>
+    <div id="ult-banner" class="ult-banner"></div>
+    <div id="respawn-overlay" class="respawn-overlay"><b>ELIMINATED</b><span id="respawn-by"></span><i id="respawn-in">4</i></div>
+    <div class="hud-bottom">
+      <div class="hp-wrap"><div class="hp-num"><b id="hp-num">500</b><small id="hp-max">/ 500</small></div><div class="hp-bar"><div id="hp-fill"></div><div id="heal-flash"></div></div><div id="ult-meter" class="ult-meter"><i id="ult-fill"></i><b id="ult-pct">0%</b></div></div>
+      <div class="cooldowns"><div class="cd" id="cd-e"><i></i><b>E</b></div><div class="cd" id="cd-s"><i></i><b>⇧</b></div><div class="cd ult" id="cd-u"><i></i><b>ULT</b></div></div>
+    </div>
+    <div id="touch-ui" class="touch-ui">
+      <div id="stick" class="stick"><div id="stick-knob" class="stick-knob"></div></div>
+      <div id="cam-zone" class="cam-zone"></div>
+      <div class="touch-btns">
+        <button id="tb-fire" class="tb fire">◉</button>
+        <button id="tb-aim" class="tb small">◎</button>
+        <button id="tb-jump" class="tb small">▲</button>
+        <button id="tb-e" class="tb">E</button>
+        <button id="tb-s" class="tb">⇧</button>
+        <button id="tb-ult" class="tb ult">★</button>
+      </div>
+    </div>
+    <div id="crosshair" class="crosshair"><i class="t"></i><i class="b"></i><i class="l"></i><i class="r"></i><span class="dot"></span></div>
+  </div>
+  <!-- Pause -->
+  <div id="pause-screen" class="screen modal">
+    <div class="panel"><h2>PAUSED</h2>
+      <button id="btn-resume" class="btn primary">RESUME</button>
+      <button id="btn-pause-settings" class="btn">SETTINGS</button>
+      <button id="btn-quit" class="btn danger">QUIT MATCH</button>
+    </div>
+  </div>
+  <!-- Scoreboard -->
+  <div id="board-screen" class="screen modal">
+    <div class="panel wide"><h2 id="board-title">SCOREBOARD</h2><div id="board-rows" class="board-rows"></div>
+      <button class="btn" data-close-board>CLOSE</button>
+    </div>
+  </div>
+  <!-- Results -->
+  <div id="result-screen" class="screen">
+    <div id="result-banner" class="result-banner">VICTORY</div>
+    <div id="result-mvp" class="result-mvp"></div>
+    <div id="result-rows" class="board-rows"></div>
+    <div class="result-foot"><button id="btn-again" class="btn primary">PLAY AGAIN</button><button id="btn-tomenu" class="btn">MAIN MENU</button></div>
+  </div>
+  <div id="toast" class="toast"></div>
+</div>
+<script type="module" src="js/main.js?v=2"></script>
+</body>
+</html>
