@@ -191,6 +191,13 @@ const EXPECTED_EXPORTS: Record<string, string[]> = {
   'power-select-modal': ['PowerSelectModal', 'default'],
   'settings-modal': ['SettingsModal', 'default'],
   'orientation-guard': ['OrientationGuard', 'default'],
+  'flight-system': ['FlightSystem', 'default'],
+  'agatha-flight-profile': ['agathaFlightProfile', 'default'],
+  'ironman-flight-profile': ['ironManFlightProfile', 'default'],
+  'deal-damage': ['DealDamageSystem', 'default'],
+  'vfx-system': ['VFXSystem', 'default'],
+  'cooldown-system': ['CooldownSystem', 'default'],
+  'movement-system': ['MovementSystem', 'default'],
   'game-scene': ['GameScene', 'default'],
   'stickman-rig': ['createStickmanRig', 'default'],
   'audio-system': ['audioSystem', 'default'],
@@ -1408,6 +1415,10 @@ class ScriptRuntimeEngine {
       return { pos: scene.currentAimPoint.clone(), target: null };
     };
     const onDamage = (dummy: any, dmg: number, hitPos: any, kb: any) => {
+      if (scene.dealDamage?.apply) {
+        scene.dealDamage.apply(dummy, dmg, hitPos, kb);
+        return;
+      }
       const res = dummy.takeDamage(dmg, hitPos, kb);
       if (res.actualDamage > 0) scene.triggerHitConfirm?.();
       if (scene.projectileSystem?.damageNumbers && typeof scene.projectileSystem.nextDamageId === 'number') {

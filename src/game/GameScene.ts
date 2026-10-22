@@ -11,6 +11,10 @@ import { BuildModeManager } from './BuildModeManager';
 import { liveConfigManager, LiveGameConfig } from './LiveConfigManager';
 import { scriptRuntimeEngine } from './ScriptRuntimeEngine';
 import { gameplayRestrictions } from './GameplayRestrictions';
+import { FlightSystem } from './systems/FlightSystem';
+import { DealDamageSystem } from './systems/DealDamage';
+import { CooldownSystem } from './systems/CooldownSystem';
+import { MovementSystem } from './systems/MovementSystem';
 
 export interface JoystickState {
   x: number; // -1 to 1
@@ -84,7 +88,6 @@ export class GameScene {
   private targetRotationY: number = 0;
   private currentSpeed: number = 0;
   private groundMaxSpeed: number = 6.4;
-  private flightMaxSpeed: number = 8.8;
   private playerCollisionRadius: number = 0.45;
 
   // Camera configuration (live-tunable through LiveConfigManager)
@@ -100,16 +103,29 @@ export class GameScene {
   public isDashing: boolean = false;
   private dashTimer: number = 0;
   private dashDuration: number = 0.22;
-  public dashCooldownRemaining: number = 0;
-  public dashCooldownTotal: number = 2.2;
+  private dashCooldownDuration: number = 2.2;
+  private dashCooldown = new CooldownSystem();
   private dashDir: THREE.Vector3 = new THREE.Vector3(0, 0, -1);
   private dashSpeed: number = 19.5;
 
-  // Controlled Flight State
-  public isFlying: boolean = false;
-  private targetFlightY: number = 0;
-  private currentFlightY: number = 0;
-  private flightBankRoll: number = 0;
+  private flightSystem = new FlightSystem();
+  private dealDamage!: DealDamageSystem;
+
+  public get isFlying(): boolean {
+    return this.flightSystem.isFlying;
+  }
+
+  public get dashCooldownRemaining(): number {
+    return this.dashCooldown.remaining('dash');
+  }
+
+  public get dashCooldownTotal(): number {
+    return this.dashCooldown.total('dash') || this.dashCooldownDuration;
+  }
+
+  public get damageSystem(): DealDamageSystem {
+    return this.dealDamage;
+  }
 
   // Camera follow state
   private cameraOffset: THREE.Vector3 = new THREE.Vector3(0, 2.3, 5.0);
@@ -200,13 +216,30 @@ export class GameScene {
     this.animController = new AnimationController(this.stickman);
 
     // 6. Projectile System
-    this.projectileSystem = new ProjectileSystem(this.scene, (isTargetHit: boolean) => {
-      if (isTargetHit) {
-        this.triggerHitConfirm();
-        if (this.settings.cameraShake) {
-          this.addCameraShake(0.04);
+    this.projectileSystem = new ProjectileSystem(
+      this.scene,
+      (isTargetHit: boolean) => {
+        if (isTargetHit) {
+          this.triggerHitConfirm();
+          if (this.settings.cameraShake) {
+            this.addCameraShake(0.04);
+          }
         }
-      }
+      },
+      (dummy, amount, hitPos) => this.dealDamage.apply(dummy, amount, hitPos)
+    );
+
+    this.dealDamage = new DealDamageSystem({
+      onConfirmedHit: () => this.triggerHitConfirm(),
+      onDamageNumber: (value, worldPos) => {
+        this.projectileSystem.damageNumbers.push({
+          id: (this.projectileSystem as unknown as { nextDamageId: number }).nextDamageId++,
+          value,
+          worldPos,
+          age: 0,
+          maxAge: 0.95,
+        });
+      },
     });
 
     // 7. Target Dummies (Three stationary training dummies by default, #3 is Rival)
@@ -222,19 +255,7 @@ export class GameScene {
         }
         return { pos: this.currentAimPoint.clone(), target: null };
       },
-      (dummy, dmg, hitPos, kb) => {
-        const res = dummy.takeDamage(dmg, hitPos, kb);
-        if (res.actualDamage > 0) {
-          this.triggerHitConfirm();
-        }
-        this.projectileSystem.damageNumbers.push({
-          id: (this.projectileSystem as unknown as { nextDamageId: number }).nextDamageId++,
-          value: res.actualDamage,
-          worldPos: hitPos.clone().add(new THREE.Vector3(0, 0.4, 0)),
-          age: 0,
-          maxAge: 0.95,
-        });
-      },
+      (dummy, dmg, hitPos, kb) => this.dealDamage.apply(dummy, dmg, hitPos, kb),
       (amt) => {
         if (this.settings.cameraShake) {
           this.addCameraShake(amt);
@@ -255,19 +276,7 @@ export class GameScene {
         }
         return { pos: this.currentAimPoint.clone(), target: null };
       },
-      (dummy, dmg, hitPos, kb) => {
-        const res = dummy.takeDamage(dmg, hitPos, kb);
-        if (res.actualDamage > 0) {
-          this.triggerHitConfirm();
-        }
-        this.projectileSystem.damageNumbers.push({
-          id: (this.projectileSystem as unknown as { nextDamageId: number }).nextDamageId++,
-          value: res.actualDamage,
-          worldPos: hitPos.clone().add(new THREE.Vector3(0, 0.4, 0)),
-          age: 0,
-          maxAge: 0.95,
-        });
-      },
+      (dummy, dmg, hitPos, kb) => this.dealDamage.apply(dummy, dmg, hitPos, kb),
       (amt) => {
         if (this.settings.cameraShake) {
           this.addCameraShake(amt);
@@ -579,6 +588,7 @@ export class GameScene {
   public setPowerSet(set: 'classic' | 'ironman' | 'agatha'): void {
     this.currentPowerSet = set;
     this.animController.isAgatha = set === 'agatha';
+    this.flightSystem.setProfile(set === 'agatha' ? 'agatha' : 'ironman');
     this.respawnPlayer();
   }
 
@@ -595,12 +605,10 @@ export class GameScene {
     this.camPitch = 0;
 
     // Reset flight and dash
-    this.isFlying = false;
-    this.targetFlightY = 0;
-    this.currentFlightY = 0;
+    this.flightSystem.reset();
     this.isDashing = false;
     this.dashTimer = 0;
-    this.dashCooldownRemaining = 0;
+    this.dashCooldown.reset('dash');
     this.animController.isFlying = false;
     this.animController.isDashing = false;
 
@@ -795,7 +803,7 @@ export class GameScene {
   }
 
   public triggerDash(): boolean {
-    if (this.dashCooldownRemaining > 0) return false;
+    if (!this.dashCooldown.isReady('dash')) return false;
 
     // Centralized gameplay restriction check
     if (
@@ -831,7 +839,7 @@ export class GameScene {
           }
         );
         if (success) {
-          this.dashCooldownRemaining = this.dashCooldownTotal;
+          this.dashCooldown.start('dash', this.dashCooldownDuration);
           return true;
         }
         return false;
@@ -844,7 +852,7 @@ export class GameScene {
     this.dashDir.copy(dir);
     this.isDashing = true;
     this.dashTimer = 0;
-    this.dashCooldownRemaining = this.dashCooldownTotal;
+    this.dashCooldown.start('dash', this.dashCooldownDuration);
 
     this.playerRotationY = Math.atan2(-dir.x, -dir.z);
 
@@ -858,26 +866,12 @@ export class GameScene {
   }
 
   public toggleFlight(): boolean {
-    // Centralized gameplay restriction check
-    if (
-      gameplayRestrictions.hasRestriction('NoFlight') ||
-      gameplayRestrictions.hasRestriction('Stunned')
-    ) {
-      audioSystem.playError?.();
-      return false;
+    const result = this.flightSystem.toggle();
+    if (result.blocked) return this.flightSystem.isFlying;
+    if (this.currentPowerSet === 'agatha' && this.agathaAbilities) {
+      this.agathaAbilities.isArcaneFlightActive = this.flightSystem.isFlying;
     }
-
-    this.isFlying = !this.isFlying;
-    this.targetFlightY = this.isFlying ? 3.6 : 0;
-    if (this.currentPowerSet === 'agatha') {
-      audioSystem.playArcaneFlight(this.isFlying);
-      if (this.agathaAbilities) {
-        this.agathaAbilities.isArcaneFlightActive = this.isFlying;
-      }
-    } else {
-      audioSystem.playFlightToggle(this.isFlying);
-    }
-    return this.isFlying;
+    return this.flightSystem.isFlying;
   }
 
   private onKeyDown = (e: KeyboardEvent): void => {
@@ -978,18 +972,13 @@ export class GameScene {
     gameplayRestrictions.update(dt);
 
     // 0. Update Dash Cooldown
-    if (this.dashCooldownRemaining > 0) {
-      this.dashCooldownRemaining = Math.max(0, this.dashCooldownRemaining - dt);
-    }
+    this.dashCooldown.update(dt);
 
     // 0b. Smooth Flight Altitude & Hover Bobbing
-    this.targetFlightY = this.isFlying ? 3.6 : 0;
-    this.currentFlightY = THREE.MathUtils.damp(this.currentFlightY, this.targetFlightY, 6.0, dt);
-    const hoverBob = this.isFlying ? Math.sin(performance.now() * 0.0035) * 0.12 : 0;
     const chokeOffset = (this.currentPowerSet === 'agatha' && this.agathaAbilities)
       ? this.agathaAbilities.chokeElevationOffset
       : 0;
-    this.playerPos.y = this.currentFlightY + hoverBob + chokeOffset;
+    this.playerPos.y = this.flightSystem.update(dt) + chokeOffset;
 
     // 0c. Camera FOV Dynamic Recovery from Dash
     if (Math.abs(this.camera.fov - this.cameraBaseFov) > 0.05) {
@@ -998,18 +987,9 @@ export class GameScene {
     }
 
     // 1. Calculate directional input from joystick or keyboard
-    let inputX = 0;
-    let inputY = 0;
-
-    if (this.joystick.active) {
-      inputX = this.joystick.x;
-      inputY = this.joystick.y;
-    } else {
-      if (this.keyState['KeyW'] || this.keyState['ArrowUp']) inputY -= 1;
-      if (this.keyState['KeyS'] || this.keyState['ArrowDown']) inputY += 1;
-      if (this.keyState['KeyA'] || this.keyState['ArrowLeft']) inputX -= 1;
-      if (this.keyState['KeyD'] || this.keyState['ArrowRight']) inputX += 1;
-    }
+    const rawInput = MovementSystem.readInput(this.joystick, this.keyState);
+    let inputX = rawInput.x;
+    let inputY = rawInput.y;
 
     // Centralized gameplay restriction check for movement
     const isRestrictedMovement =
@@ -1034,21 +1014,11 @@ export class GameScene {
     }
 
     // 2. Camera-relative movement direction
-    const camForward = new THREE.Vector3();
-    this.camera.getWorldDirection(camForward);
-    camForward.y = 0;
-    camForward.normalize();
-
-    const camRight = new THREE.Vector3();
-    camRight.crossVectors(camForward, new THREE.Vector3(0, 1, 0)).normalize();
-
     const moveDir = new THREE.Vector3();
-    const effectiveMaxSpeed = this.isFlying ? this.flightMaxSpeed : this.groundMaxSpeed;
+    const effectiveMaxSpeed = this.isFlying ? this.flightSystem.maxSpeed : this.groundMaxSpeed;
 
     if (normalizedMagnitude > 0) {
-      moveDir.addScaledVector(camRight, normX);
-      moveDir.addScaledVector(camForward, -normY);
-      moveDir.normalize();
+      moveDir.copy(MovementSystem.cameraRelativeDirection(this.camera, normX, normY));
 
       const targetSpeed = normalizedMagnitude * effectiveMaxSpeed;
       this.currentSpeed = THREE.MathUtils.damp(this.currentSpeed, targetSpeed, 28.0, dt);
@@ -1061,77 +1031,48 @@ export class GameScene {
         while (diff > Math.PI) diff -= Math.PI * 2;
         this.playerRotationY += diff * Math.min(1.0, dt * 26.0);
 
-        // Banking roll when turning into direction
-        this.flightBankRoll = THREE.MathUtils.damp(this.flightBankRoll, THREE.MathUtils.clamp(-diff * 0.55, -0.42, 0.42), 12.0, dt);
+        this.flightSystem.updateBank(diff, true, dt);
       }
     } else {
       this.currentSpeed = THREE.MathUtils.damp(this.currentSpeed, 0, 30.0, dt);
       if (this.currentSpeed < 0.005) {
         this.currentSpeed = 0;
       }
-      this.flightBankRoll = THREE.MathUtils.damp(this.flightBankRoll, 0, 10.0, dt);
+      this.flightSystem.updateBank(0, false, dt);
     }
 
     // 3. Move player position horizontally with solid structure collision check
     if (this.isDashing) {
       this.dashTimer += dt;
-      const step = this.dashSpeed * dt;
-      const nextPos = this.playerPos.clone().addScaledVector(this.dashDir, step);
-      const playerRadius = this.playerCollisionRadius;
-      let collided = false;
-
-      for (const box of this.structureBoxes) {
-        const expanded = box.clone();
-        expanded.min.subScalar(playerRadius);
-        expanded.max.addScalar(playerRadius);
-        if (expanded.containsPoint(nextPos)) {
-          collided = true;
-          break;
-        }
-      }
-
-      if (!collided) {
-        this.playerPos.x = nextPos.x;
-        this.playerPos.z = nextPos.z;
-      }
-
+      MovementSystem.tryMove(
+        this.playerPos,
+        this.dashDir,
+        this.dashSpeed * dt,
+        this.structureBoxes,
+        this.playerCollisionRadius
+      );
       if (this.dashTimer >= this.dashDuration) {
         this.isDashing = false;
       }
     } else if (this.currentSpeed > 0) {
-      const step = this.currentSpeed * dt;
       const facingDir = new THREE.Vector3(
         -Math.sin(this.playerRotationY),
         0,
         -Math.cos(this.playerRotationY)
       );
-
-      const nextPos = this.playerPos.clone().addScaledVector(facingDir, step);
-      const playerRadius = this.playerCollisionRadius;
-      let collided = false;
-
-      for (const box of this.structureBoxes) {
-        const expanded = box.clone();
-        expanded.min.subScalar(playerRadius);
-        expanded.max.addScalar(playerRadius);
-        if (expanded.containsPoint(nextPos)) {
-          collided = true;
-          break;
-        }
-      }
-
-      if (!collided) {
-        this.playerPos.x = nextPos.x;
-        this.playerPos.z = nextPos.z;
-      }
+      MovementSystem.tryMove(
+        this.playerPos,
+        facingDir,
+        this.currentSpeed * dt,
+        this.structureBoxes,
+        this.playerCollisionRadius
+      );
     }
 
     // Interactive Jump Pad bounce detection
     const padHit = this.buildModeManager.checkJumpPads(this.playerPos);
     if (padHit && !this.isDashing) {
-      this.isFlying = true;
-      this.targetFlightY = Math.min(16, this.targetFlightY + padHit.bouncePower * 0.38);
-      this.currentFlightY = Math.min(16, this.currentFlightY + padHit.bouncePower * 0.38);
+      this.flightSystem.boost(padHit.bouncePower * 0.38);
       audioSystem.playFlightToggle(true);
       this.projectileSystem.emitImpactParticles(this.playerPos.clone().add(new THREE.Vector3(0, 0.2, 0)), 22, 0x00f0ff);
       if (this.settings.cameraShake) {
@@ -1160,7 +1101,7 @@ export class GameScene {
       const thrusterIntensity = this.isDashing
         ? 2.2
         : this.isFlying
-        ? 1.0 + (this.currentSpeed / this.flightMaxSpeed) * 0.6
+        ? 1.0 + (this.currentSpeed / this.flightSystem.maxSpeed) * 0.6
         : 0;
 
       this.stickman.thrusters.leftFoot.setIntensity(thrusterIntensity, customCol);
@@ -1187,7 +1128,7 @@ export class GameScene {
     // 4. Update animation controller
     this.animController.isFlying = this.isFlying;
     this.animController.isDashing = this.isDashing;
-    this.animController.flightRoll = this.flightBankRoll;
+    this.animController.flightRoll = this.flightSystem.bankRoll;
     try {
       this.animController.update(dt * this.animationSpeed, this.currentSpeed / effectiveMaxSpeed);
     } catch (err: unknown) {
@@ -1515,9 +1456,9 @@ export class GameScene {
 
   public applyLiveConfig(cfg: LiveGameConfig): void {
     this.groundMaxSpeed = cfg.groundMaxSpeed;
-    this.flightMaxSpeed = cfg.flightMaxSpeed;
+    this.flightSystem.setMaxSpeed(cfg.flightMaxSpeed);
     this.dashSpeed = cfg.dashSpeed;
-    this.dashCooldownTotal = cfg.dashCooldown;
+    this.dashCooldownDuration = cfg.dashCooldown;
     this.dashDuration = cfg.dashDuration;
     this.playerCollisionRadius = cfg.playerCollisionRadius;
 
@@ -1590,19 +1531,8 @@ export class GameScene {
         }
         return { pos: this.currentAimPoint.clone(), target: null };
       },
-      (dummy: TargetDummy, dmg: number, hitPos: THREE.Vector3, kb?: THREE.Vector3) => {
-        const res = dummy.takeDamage(dmg, hitPos, kb);
-        if (res.actualDamage > 0) {
-          this.triggerHitConfirm();
-        }
-        this.projectileSystem.damageNumbers.push({
-          id: (this.projectileSystem as any).nextDamageId++,
-          value: res.actualDamage,
-          worldPos: hitPos.clone().add(new THREE.Vector3(0, 0.4, 0)),
-          age: 0,
-          maxAge: 0.95,
-        });
-      },
+      (dummy: TargetDummy, dmg: number, hitPos: THREE.Vector3, kb?: THREE.Vector3) =>
+        this.dealDamage.apply(dummy, dmg, hitPos, kb),
       (amt: number) => {
         if (this.settings.cameraShake) {
           this.addCameraShake(amt);
@@ -1635,17 +1565,7 @@ export class GameScene {
     };
 
     const onDamage = (dummy: TargetDummy, dmg: number, hitPos: THREE.Vector3, kb?: THREE.Vector3) => {
-      const res = dummy.takeDamage(dmg, hitPos, kb);
-      if (res.actualDamage > 0) {
-        this.triggerHitConfirm();
-      }
-      this.projectileSystem.damageNumbers.push({
-        id: (this.projectileSystem as any).nextDamageId++,
-        value: res.actualDamage,
-        worldPos: hitPos.clone().add(new THREE.Vector3(0, 0.4, 0)),
-        age: 0,
-        maxAge: 0.95,
-      });
+      this.dealDamage.apply(dummy, dmg, hitPos, kb);
     };
 
     const onShake = (amt: number) => {
@@ -1709,17 +1629,7 @@ export class GameScene {
     };
 
     const onDamage = (dummy: TargetDummy, dmg: number, hitPos: THREE.Vector3, kb?: THREE.Vector3) => {
-      const res = dummy.takeDamage(dmg, hitPos, kb);
-      if (res.actualDamage > 0) {
-        this.triggerHitConfirm();
-      }
-      this.projectileSystem.damageNumbers.push({
-        id: (this.projectileSystem as any).nextDamageId++,
-        value: res.actualDamage,
-        worldPos: hitPos.clone().add(new THREE.Vector3(0, 0.4, 0)),
-        age: 0,
-        maxAge: 0.95,
-      });
+      this.dealDamage.apply(dummy, dmg, hitPos, kb);
     };
 
     const onShake = (amt: number) => {
@@ -1791,14 +1701,19 @@ export class GameScene {
     if (this.projectileSystem) {
       this.projectileSystem.dispose();
     }
-    this.projectileSystem = new NewClass(this.scene, (isTargetHit: boolean) => {
-      if (isTargetHit) {
-        this.triggerHitConfirm();
-        if (this.settings.cameraShake) {
-          this.addCameraShake(0.04);
+    this.projectileSystem = new NewClass(
+      this.scene,
+      (isTargetHit: boolean) => {
+        if (isTargetHit) {
+          this.triggerHitConfirm();
+          if (this.settings.cameraShake) {
+            this.addCameraShake(0.04);
+          }
         }
-      }
-    });
+      },
+      (dummy: TargetDummy, amount: number, hitPos: THREE.Vector3) =>
+        this.dealDamage.apply(dummy, amount, hitPos)
+    );
   }
 
   public updateStickmanRig(rigFactory: () => StickmanNodes): void {

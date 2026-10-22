@@ -49,8 +49,6 @@ import {
 import {
   PROJECT_SCRIPTS,
   ProjectScriptInfo,
-  ScriptCategory,
-  SCRIPT_TABS,
 } from '../../game/RealProjectScripts';
 import {
   gameplayRestrictions,
@@ -58,9 +56,10 @@ import {
   RestrictionType,
 } from '../../game/GameplayRestrictions';
 import { audioSystem } from '../../game/AudioSystem';
-import { searchScripts, highlightTypeScript } from '../../game/ScriptSearch';
+import { highlightTypeScript } from '../../game/ScriptSearch';
 import { ConfigPanel } from './ConfigPanel';
 import { BuildToast, ToastMessage } from './BuildToast';
+import { ScriptExplorer } from './ScriptExplorer';
 
 interface BuildModeContainerProps {
   gameScene: GameScene;
@@ -85,8 +84,6 @@ export const BuildModeContainer: React.FC<BuildModeContainerProps> = ({
 }) => {
   // Navigation & Scripts
   const [selectedScriptId, setSelectedScriptId] = useState<string>('agatha-arcane-blast');
-  const [activeCategory, setActiveCategory] = useState<ScriptCategory | 'Todos'>('Todos');
-  const [searchQuery, setSearchQuery] = useState('');
 
   // Editor Panels State (Collapsible)
   const [isLeftNavOpen, setIsLeftNavOpen] = useState(true);
@@ -169,9 +166,6 @@ export const BuildModeContainer: React.FC<BuildModeContainerProps> = ({
 
   // Script catalog (recomputed on every engine notification for live updates)
   const allScripts = scriptRuntimeEngine.getScripts();
-  const filteredScripts = useMemo(() => {
-    return searchScripts(allScripts, searchQuery, activeCategory).map((result) => result.script);
-  }, [allScripts, activeCategory, searchQuery]);
 
   const activeScript = useMemo(
     () => scriptRuntimeEngine.getScriptById(selectedScriptId) || allScripts[0],
@@ -691,163 +685,24 @@ export const BuildModeContainer: React.FC<BuildModeContainerProps> = ({
         {/* ============================================================== */}
         {/* LEFT PANEL: Script Catalog Navigation */}
         {/* ============================================================== */}
-        <aside
-          className={`
-            border-r border-[#27272a] bg-[#101013] flex flex-col shrink-0 z-30 transition-all duration-200
-            ${isLeftNavOpen ? 'w-64 md:w-72' : 'w-0 hidden md:flex md:w-0 md:border-r-0 overflow-hidden'}
-            ${mobileDrawer === 'left' ? 'fixed inset-y-12 left-0 w-72 flex shadow-2xl z-40' : 'hidden md:flex'}
-          `}
+        <div
+          className={`${
+            mobileDrawer === 'left'
+              ? 'fixed inset-y-12 left-0 z-40 flex shadow-2xl md:static md:inset-auto md:z-30 md:shadow-none'
+              : 'hidden md:flex'
+          } h-full`}
         >
-          {/* Search Box */}
-          <div className="p-2.5 border-b border-[#27272a]">
-            <div className="relative">
-              <Search
-                size={14}
-                className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[#71717a]"
-              />
-              <input
-                type="text"
-                placeholder="Filtrar arquivos de script..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full bg-[#18181b] border border-[#27272a] rounded px-2.5 pl-8 py-1.5 text-xs text-white placeholder-[#71717a] focus:outline-none focus:border-zinc-500"
-              />
-              {searchQuery && (
-                <button
-                  onClick={() => setSearchQuery('')}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#71717a] hover:text-white"
-                >
-                  <X size={13} />
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* Categories Tab Selector */}
-          <div className="flex items-center gap-1 px-2.5 py-1.5 border-b border-[#27272a] overflow-x-auto text-[11px] no-scrollbar">
-            <button
-              onClick={() => setActiveCategory('Todos')}
-              className={`px-2 py-0.5 rounded whitespace-nowrap transition-colors ${
-                activeCategory === 'Todos'
-                  ? 'bg-[#27272a] text-white font-medium'
-                  : 'text-[#a1a1aa] hover:text-white'
-              }`}
-            >
-              Todos ({allScripts.length})
-            </button>
-            {SCRIPT_TABS.map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveCategory(tab.id)}
-                className={`px-2 py-0.5 rounded whitespace-nowrap transition-colors ${
-                  activeCategory === tab.id
-                    ? 'bg-[#27272a] text-white font-medium'
-                    : 'text-[#a1a1aa] hover:text-white'
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-
-          {/* Script Items List */}
-          <div className="flex-1 overflow-y-auto p-1.5 space-y-0.5 font-sans">
-            {filteredScripts.length === 0 ? (
-              <div className="text-center py-8 text-xs text-[#71717a]">
-                Nenhum script encontrado
-              </div>
-            ) : (
-              filteredScripts.map((script) => {
-                const isSelected = script.id === selectedScriptId;
-                const status = scriptRuntimeEngine.getScriptStatus(script.id);
-                const state = scriptRuntimeEngine.getScriptState(script.id);
-                const hasApplied = status.status === 'applied';
-                const hasRestartApplied =
-                  state.capability === 'restart-required' && state.appliedSource !== null;
-                const hasError = status.status === 'error';
-
-                return (
-                  <button
-                    key={script.id}
-                    onClick={() => {
-                      audioSystem.playUiClick?.();
-                      setSelectedScriptId(script.id);
-                      setMobileDrawer('none');
-                    }}
-                    className={`w-full text-left p-2 rounded flex items-start justify-between gap-2 transition-colors ${
-                      isSelected
-                        ? 'bg-[#27272a] text-white'
-                        : 'hover:bg-[#18181b] text-[#d4d4d8]'
-                    }`}
-                  >
-                    <div className="flex items-start gap-2 min-w-0">
-                      <FileCode
-                        size={15}
-                        className={`mt-0.5 shrink-0 ${
-                          script.character === 'agatha'
-                            ? 'text-purple-400'
-                            : script.character === 'ironman'
-                            ? 'text-cyan-400'
-                            : 'text-[#a1a1aa]'
-                        }`}
-                      />
-                      <div className="min-w-0">
-                        <div className="text-xs font-medium truncate leading-tight">
-                          {script.name}
-                        </div>
-                        <div className="text-[10px] text-[#71717a] font-mono truncate mt-0.5">
-                          {script.filePath.split('/').pop()}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="shrink-0 flex items-center gap-1 mt-0.5">
-                      {(script.runtimeIntegration || 'hot-swap') !== 'hot-swap' && (
-                        <span
-                          className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0"
-                          title="Exige reinicialização do jogo"
-                        />
-                      )}
-                      {hasError ? (
-                        <span
-                          className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0"
-                          title="Erro na compilação"
-                        />
-                      ) : hasApplied ? (
-                        <span
-                          className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0"
-                          title="Aplicado e ativo no jogo"
-                        />
-                      ) : hasRestartApplied ? (
-                        <span
-                          className="w-1.5 h-1.5 rounded-full bg-cyan-500 shrink-0"
-                          title="Aplicado para o próximo build/reinício"
-                        />
-                      ) : (
-                        <span
-                          className="w-1.5 h-1.5 rounded-full bg-zinc-600 shrink-0"
-                          title="Pendente"
-                        />
-                      )}
-                    </div>
-                  </button>
-                );
-              })
-            )}
-          </div>
-
-          {/* Quick Footer Stats & Global Restore */}
-          <div className="p-2 border-t border-[#27272a] text-[10px] text-[#71717a] flex items-center justify-between">
-            <span>{filteredScripts.length} módulos</span>
-            <button
-              onClick={handleRestoreAll}
-              className="text-[#a1a1aa] hover:text-amber-400 transition-colors underline decoration-dotted"
-              title="Restaurar todos os scripts para o padrão de fábrica"
-            >
-              Restaurar Todos
-            </button>
-          </div>
-        </aside>
+          <ScriptExplorer
+            scripts={allScripts}
+            selectedScriptId={selectedScriptId}
+            mobileOpen={mobileDrawer === 'left'}
+            onSelectScript={(id) => {
+              setSelectedScriptId(id);
+              setMobileDrawer('none');
+            }}
+            onRestoreAll={handleRestoreAll}
+          />
+        </div>
 
         {/* Mobile backdrop for left drawer */}
         {mobileDrawer === 'left' && (

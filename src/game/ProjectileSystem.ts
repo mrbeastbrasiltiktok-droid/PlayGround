@@ -1,20 +1,12 @@
 import * as THREE from 'three';
 import { TargetDummy } from './TargetDummy';
 import { audioSystem } from './AudioSystem';
+import { VFXSystem } from './systems/VFXSystem';
 
 export interface DamageNumber {
   id: number;
   value: number;
   worldPos: THREE.Vector3;
-  age: number;
-  maxAge: number;
-}
-
-export interface Particle {
-  pos: THREE.Vector3;
-  vel: THREE.Vector3;
-  color: THREE.Color;
-  size: number;
   age: number;
   maxAge: number;
 }
@@ -113,11 +105,7 @@ export class Projectile {
 export class ProjectileSystem {
   private scene: THREE.Scene;
   private projectiles: Projectile[] = [];
-  private particles: Particle[] = [];
-  private particleInstancedMesh: THREE.InstancedMesh;
-  private readonly maxParticles: number = 300;
-  private dummyMatrix = new THREE.Matrix4();
-  private dummyColor = new THREE.Color();
+  private vfx: VFXSystem;
 
   // Floating damage numbers
   public damageNumbers: DamageNumber[] = [];
@@ -125,18 +113,21 @@ export class ProjectileSystem {
 
   // Impact trigger callback (for camera shake)
   private onImpactCallback: (isTargetHit: boolean) => void;
+  private onDamage?: (
+    dummy: TargetDummy,
+    amount: number,
+    hitPos: THREE.Vector3
+  ) => void;
 
-  constructor(scene: THREE.Scene, onImpact: (isTargetHit: boolean) => void) {
+  constructor(
+    scene: THREE.Scene,
+    onImpact: (isTargetHit: boolean) => void,
+    onDamage?: (dummy: TargetDummy, amount: number, hitPos: THREE.Vector3) => void
+  ) {
     this.scene = scene;
     this.onImpactCallback = onImpact;
-
-    // Pooled particle instancing for mobile performance
-    const pGeo = new THREE.SphereGeometry(0.08, 8, 8);
-    const pMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.95 });
-    this.particleInstancedMesh = new THREE.InstancedMesh(pGeo, pMat, this.maxParticles);
-    this.particleInstancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    this.particleInstancedMesh.count = 0;
-    this.scene.add(this.particleInstancedMesh);
+    this.onDamage = onDamage;
+    this.vfx = new VFXSystem(scene);
   }
 
   public launch(
@@ -150,35 +141,16 @@ export class ProjectileSystem {
     this.scene.add(proj.mesh);
   }
 
-  public emitImpactParticles(pos: THREE.Vector3, count: number, baseColor: number = 0x48cae4): void {
-    const burstCount = Math.min(count, 35);
-    for (let i = 0; i < burstCount; i++) {
-      if (this.particles.length >= this.maxParticles) break;
-
-      const angle = Math.random() * Math.PI * 2;
-      const elevation = (Math.random() - 0.2) * Math.PI;
-      const speed = 2.5 + Math.random() * 6.5;
-
-      const vel = new THREE.Vector3(
-        Math.cos(elevation) * Math.cos(angle) * speed,
-        Math.abs(Math.sin(elevation) * speed) + 1.5,
-        Math.cos(elevation) * Math.sin(angle) * speed
-      );
-
-      this.particles.push({
-        pos: pos.clone(),
-        vel,
-        color: new THREE.Color(baseColor),
-        size: 0.08 + Math.random() * 0.08,
-        age: 0,
-        maxAge: 0.45 + Math.random() * 0.35,
-      });
-    }
+  public emitImpactParticles(
+    pos: THREE.Vector3,
+    count: number,
+    baseColor: number = 0x48cae4
+  ): void {
+    this.vfx.emitImpactParticles(pos, count, baseColor);
   }
 
   public emitDestructionParticles(pos: THREE.Vector3): void {
-    this.emitImpactParticles(pos, 40, 0xff9f1c);
-    this.emitImpactParticles(pos, 25, 0xe63946);
+    this.vfx.emitDestructionParticles(pos);
   }
 
   public update(dt: number, dummies: TargetDummy[]): void {
@@ -187,24 +159,8 @@ export class ProjectileSystem {
       const p = this.projectiles[i];
       p.update(dt);
 
-      // Trail sparks
-      if (Math.random() < 0.4 && this.particles.length < this.maxParticles) {
-        this.particles.push({
-          pos: p.pos.clone().add(new THREE.Vector3(
-            (Math.random() - 0.5) * 0.1,
-            (Math.random() - 0.5) * 0.1,
-            (Math.random() - 0.5) * 0.1
-          )),
-          vel: p.vel.clone().multiplyScalar(-0.15).add(new THREE.Vector3(
-            (Math.random() - 0.5) * 1,
-            Math.random() * 1.5,
-            (Math.random() - 0.5) * 1
-          )),
-          color: new THREE.Color(0x90e0ef),
-          size: 0.06,
-          age: 0,
-          maxAge: 0.22,
-        });
+      if (Math.random() < 0.4) {
+        this.vfx.emitTrailParticle(p.pos, p.vel);
       }
 
       // Check collision with dummies
@@ -217,16 +173,18 @@ export class ProjectileSystem {
         if (dist <= dummy.radius + 0.3) {
           hit = true;
           const hitPos = p.pos.clone();
-          const { actualDamage } = dummy.takeDamage(25, hitPos);
-
-          // Add floating damage number
-          this.damageNumbers.push({
-            id: this.nextDamageId++,
-            value: actualDamage,
-            worldPos: hitPos.clone().add(new THREE.Vector3(0, 0.4, 0)),
-            age: 0,
-            maxAge: 0.95,
-          });
+          if (this.onDamage) {
+            this.onDamage(dummy, 25, hitPos);
+          } else {
+            const { actualDamage } = dummy.takeDamage(25, hitPos);
+            this.damageNumbers.push({
+              id: this.nextDamageId++,
+              value: actualDamage,
+              worldPos: hitPos.clone().add(new THREE.Vector3(0, 0.4, 0)),
+              age: 0,
+              maxAge: 0.95,
+            });
+          }
 
           this.emitImpactParticles(hitPos, 22, 0x48cae4);
           audioSystem.playImpact();
@@ -249,46 +207,9 @@ export class ProjectileSystem {
       }
     }
 
-    // 2. Update Particles
-    for (let i = this.particles.length - 1; i >= 0; i--) {
-      const part = this.particles[i];
-      part.age += dt;
-      if (part.age >= part.maxAge) {
-        this.particles.splice(i, 1);
-        continue;
-      }
+    this.vfx.update(dt);
 
-      // Gravity and air drag
-      part.vel.y -= 9.8 * dt;
-      part.vel.multiplyScalar(0.96);
-      part.pos.addScaledVector(part.vel, dt);
-
-      // Floor bounce
-      if (part.pos.y < 0.02) {
-        part.pos.y = 0.02;
-        part.vel.y = -part.vel.y * 0.4;
-      }
-    }
-
-    // Update particle instancing
-    const pCount = Math.min(this.particles.length, this.maxParticles);
-    this.particleInstancedMesh.count = pCount;
-    for (let i = 0; i < pCount; i++) {
-      const part = this.particles[i];
-      const scale = (1 - part.age / part.maxAge) * part.size;
-      this.dummyMatrix.makeTranslation(part.pos.x, part.pos.y, part.pos.z);
-      this.dummyMatrix.scale(new THREE.Vector3(scale, scale, scale));
-      this.particleInstancedMesh.setMatrixAt(i, this.dummyMatrix);
-      this.particleInstancedMesh.setColorAt(i, part.color);
-    }
-    if (pCount > 0) {
-      this.particleInstancedMesh.instanceMatrix.needsUpdate = true;
-      if (this.particleInstancedMesh.instanceColor) {
-        this.particleInstancedMesh.instanceColor.needsUpdate = true;
-      }
-    }
-
-    // 3. Update Damage Numbers
+    // 2. Update Damage Numbers
     for (let i = this.damageNumbers.length - 1; i >= 0; i--) {
       const dn = this.damageNumbers[i];
       dn.age += dt;
@@ -305,6 +226,6 @@ export class ProjectileSystem {
       p.dispose(this.scene);
     }
     this.projectiles = [];
-    this.scene.remove(this.particleInstancedMesh);
+    this.vfx.dispose();
   }
 }

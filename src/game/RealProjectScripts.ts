@@ -43,6 +43,13 @@ import orientationGuardSource from '../components/OrientationGuard.tsx?raw';
 import settingsManagerSource from './SettingsManager.ts?raw';
 import liveConfigManagerSource from './LiveConfigManager.ts?raw';
 import buildModeManagerSource from './BuildModeManager.ts?raw';
+import flightSystemSource from './systems/FlightSystem.ts?raw';
+import agathaFlightProfileSource from './systems/flight/AgathaFlightProfile.ts?raw';
+import ironManFlightProfileSource from './systems/flight/IronManFlightProfile.ts?raw';
+import dealDamageSource from './systems/DealDamage.ts?raw';
+import vfxSystemSource from './systems/VFXSystem.ts?raw';
+import cooldownSystemSource from './systems/CooldownSystem.ts?raw';
+import movementSystemSource from './systems/MovementSystem.ts?raw';
 
 export type ScriptCategory =
   | 'Configurações'
@@ -430,6 +437,97 @@ export const PROJECT_SCRIPTS: ProjectScriptInfo[] = [
   // ==========================================
   // 7. SISTEMAS GLOBAIS
   // ==========================================
+  {
+    id: 'flight-system',
+    name: 'Flight System',
+    filePath: '/src/game/systems/FlightSystem.ts',
+    category: 'Sistemas',
+    summary:
+      'Sistema central de voo: física vertical, hover, inclinação, velocidade, sons e restrições. Perfis por personagem ficam em módulos filhos.',
+    originalSource: flightSystemSource,
+    fileExtension: 'ts',
+    dependencies: ['AudioSystem', 'GameplayRestrictions', 'AgathaFlightProfile', 'IronManFlightProfile'],
+    runtimeIntegration: 'restart-required',
+    keywords: ['flight', 'voo', 'sistema', 'hover', 'physical', 'shared'],
+  },
+  {
+    id: 'agatha-flight-profile',
+    name: 'Perfil de Voo — Agatha',
+    filePath: '/src/game/systems/flight/AgathaFlightProfile.ts',
+    category: 'Sistemas',
+    summary:
+      'Configuração de voo da Agatha: altitude, velocidade, hover, inclinação, som arcano e ausência de propulsores visuais.',
+    originalSource: agathaFlightProfileSource,
+    fileExtension: 'ts',
+    dependencies: ['FlightSystem'],
+    runtimeIntegration: 'restart-required',
+    keywords: ['agatha', 'voo', 'perfil', 'flight', 'profile'],
+  },
+  {
+    id: 'ironman-flight-profile',
+    name: 'Perfil de Voo — Homem de Ferro',
+    filePath: '/src/game/systems/flight/IronManFlightProfile.ts',
+    category: 'Sistemas',
+    summary:
+      'Configuração de voo do Homem de Ferro: altitude, velocidade, hover, inclinação, som de propulsores e efeitos visuais.',
+    originalSource: ironManFlightProfileSource,
+    fileExtension: 'ts',
+    dependencies: ['FlightSystem'],
+    runtimeIntegration: 'restart-required',
+    keywords: ['ironman', 'voo', 'perfil', 'flight', 'profile'],
+  },
+  {
+    id: 'deal-damage',
+    name: 'Deal Damage System',
+    filePath: '/src/game/systems/DealDamage.ts',
+    category: 'Sistemas',
+    summary:
+      'Ponto central de aplicação de dano: valida o alvo, confirma acertos e publica números de dano. Habilidades e projéteis usam a mesma API.',
+    originalSource: dealDamageSource,
+    fileExtension: 'ts',
+    dependencies: ['TargetDummy'],
+    runtimeIntegration: 'restart-required',
+    keywords: ['dano', 'damage', 'sistema', 'hit', 'combate'],
+  },
+  {
+    id: 'vfx-system',
+    name: 'VFX System',
+    filePath: '/src/game/systems/VFXSystem.ts',
+    category: 'Sistemas',
+    summary:
+      'Infraestrutura compartilhada de partículas, impactos, destruição e trilhas, com pool instanciado e limpeza centralizada.',
+    originalSource: vfxSystemSource,
+    fileExtension: 'ts',
+    dependencies: [],
+    runtimeIntegration: 'restart-required',
+    keywords: ['vfx', 'particulas', 'efeitos', 'impacto', 'pool'],
+  },
+  {
+    id: 'cooldown-system',
+    name: 'Cooldown System',
+    filePath: '/src/game/systems/CooldownSystem.ts',
+    category: 'Sistemas',
+    summary:
+      'Controle central de recargas por identificador, com início, atualização, consulta e limpeza de cooldowns.',
+    originalSource: cooldownSystemSource,
+    fileExtension: 'ts',
+    dependencies: [],
+    runtimeIntegration: 'restart-required',
+    keywords: ['cooldown', 'recarga', 'sistema', 'dash', 'tempo'],
+  },
+  {
+    id: 'movement-system',
+    name: 'Movement System',
+    filePath: '/src/game/systems/MovementSystem.ts',
+    category: 'Sistemas',
+    summary:
+      'Movimento comum: leitura de joystick/teclado, direção relativa à câmera e deslocamento com colisão contra estruturas.',
+    originalSource: movementSystemSource,
+    fileExtension: 'ts',
+    dependencies: [],
+    runtimeIntegration: 'restart-required',
+    keywords: ['movimento', 'movement', 'joystick', 'colisao', 'camera'],
+  },
   {
     id: 'settings-manager',
     name: 'Gerenciador de Configurações',
