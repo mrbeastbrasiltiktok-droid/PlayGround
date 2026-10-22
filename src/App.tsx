@@ -201,6 +201,8 @@ export default function App() {
           setClashState({ ...cs });
         }
       }
+      const flying = gameSceneRef.current?.getFlightSystem?.().isActive() ?? false;
+      setIsFlying((prev) => (prev === flying ? prev : flying));
       animId = requestAnimationFrame(checkClash);
     };
     animId = requestAnimationFrame(checkClash);
@@ -227,6 +229,10 @@ export default function App() {
     const nextState = gameSceneRef.current?.toggleFlight() ?? false;
     setIsFlying(nextState);
     return nextState;
+  }, []);
+
+  const handleFlightVertical = useCallback((direction: number) => {
+    gameSceneRef.current?.setFlightVerticalInput(direction);
   }, []);
 
   const handleSelectPowerSet = useCallback((newSet: PowerSetType) => {
@@ -365,6 +371,7 @@ export default function App() {
               onAbility={handleAbility}
               onDash={handleDash}
               onToggleFlight={handleToggleFlight}
+              onFlightVertical={handleFlightVertical}
               isFlying={isFlying}
               powerSet={powerSet}
               isClashActive={clashState.active}

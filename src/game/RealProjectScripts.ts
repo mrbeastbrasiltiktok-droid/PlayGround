@@ -6,6 +6,7 @@
 
 // Individual Agatha Abilities & Config
 import agathaConfigSource from './abilities/agatha/AgathaConfig.ts?raw';
+import agathaFlightSource from './abilities/agatha/AgathaFlight.ts?raw';
 import agathaArcaneBlastSource from './abilities/agatha/AgathaArcaneBlast.ts?raw';
 import agathaDarkDrainSource from './abilities/agatha/AgathaDarkDrain.ts?raw';
 import agathaChaosOrbSource from './abilities/agatha/AgathaChaosOrb.ts?raw';
@@ -19,7 +20,18 @@ import ironManConfigSource from './abilities/ironman/IronManConfig.ts?raw';
 import ironManRepulsorSource from './abilities/ironman/IronManRepulsor.ts?raw';
 import ironManMicroMissilesSource from './abilities/ironman/IronManMicroMissiles.ts?raw';
 import ironManUnibeamSource from './abilities/ironman/IronManUnibeam.ts?raw';
+import ironManDualBeamSource from './abilities/ironman/IronManDualBeam.ts?raw';
+import ironManBeamClashSource from './abilities/ironman/IronManBeamClash.ts?raw';
+import ironManSpinningLasersSource from './abilities/ironman/IronManSpinningLasers.ts?raw';
+import ironManFlightSource from './abilities/ironman/IronManFlight.ts?raw';
 import ironManAbilitiesSource from './IronManAbilities.ts?raw';
+
+// Shared flight architecture (physics, activation, animation, VFX, config)
+import flightSystemSource from './systems/flight/FlightSystem.ts?raw';
+import flightConfigSource from './systems/flight/CharacterFlightConfig.ts?raw';
+import flightAbilitySource from './systems/flight/CharacterFlightAbility.ts?raw';
+import flightAnimationSource from './systems/flight/CharacterFlightAnimation.ts?raw';
+import flightVfxSource from './systems/flight/CharacterFlightVFX.ts?raw';
 
 // Centralized Restrictions & Core Game Systems
 import gameplayRestrictionsSource from './GameplayRestrictions.ts?raw';
@@ -44,14 +56,41 @@ import settingsManagerSource from './SettingsManager.ts?raw';
 import liveConfigManagerSource from './LiveConfigManager.ts?raw';
 import buildModeManagerSource from './BuildModeManager.ts?raw';
 
+// Shared runtime systems (structural; imported directly by the game)
+import damageSystemSource from './systems/DamageSystem.ts?raw';
+import healthSystemSource from './systems/HealthSystem.ts?raw';
+import collisionSystemSource from './systems/CollisionSystem.ts?raw';
+import targetingSystemSource from './systems/TargetingSystem.ts?raw';
+import cameraSystemSource from './systems/CameraSystem.ts?raw';
+import cooldownSystemSource from './systems/CooldownSystem.ts?raw';
+import vfxSystemSource from './systems/VFXSystem.ts?raw';
+
+// Editor, HUD shell and application entry
+import appSource from '../App.tsx?raw';
+import buildTypesSource from './BuildTypes.ts?raw';
+import buildModeContainerSource from '../components/BuildMode/BuildModeContainer.tsx?raw';
+import configPanelSource from '../components/BuildMode/ConfigPanel.tsx?raw';
+import buildToastSource from '../components/BuildMode/BuildToast.tsx?raw';
+
+// Internal tooling (inspectable only; never hot-swapped)
+import scriptRuntimeEngineSource from './ScriptRuntimeEngine.ts?raw';
+import scriptPersistenceSource from './ScriptPersistence.ts?raw';
+import appliedScriptStoreSource from './AppliedScriptStore.ts?raw';
+import scriptSearchSource from './ScriptSearch.ts?raw';
+import projectExporterSource from './ProjectExporter.ts?raw';
+import buildModeDefaultsSource from './generated/BuildModeDefaults.ts?raw';
+import buildScriptOverridesSource from './generated/BuildScriptOverrides.ts?raw';
+
 export type ScriptCategory =
   | 'Configurações'
   | 'Habilidades'
+  | 'Voo'
   | 'Controladores'
   | 'Restrições'
   | 'Combate'
   | 'Interface & HUD'
-  | 'Sistemas';
+  | 'Sistemas'
+  | 'Editor & Ferramentas';
 
 export type RuntimeIntegration = 'hot-swap' | 'restart-required' | 'read-only';
 
@@ -89,12 +128,14 @@ export function getEffectiveScriptSource(scriptId: string, defaultSource: string
 
 export const SCRIPT_TABS: { id: ScriptCategory; label: string }[] = [
   { id: 'Habilidades', label: 'Habilidades' },
+  { id: 'Voo', label: 'Voo & Física Aérea' },
   { id: 'Configurações', label: 'Configurações' },
   { id: 'Controladores', label: 'Controladores' },
   { id: 'Restrições', label: 'Restrições & Status' },
   { id: 'Combate', label: 'Combate & Física' },
   { id: 'Interface & HUD', label: 'Interface & HUD' },
   { id: 'Sistemas', label: 'Sistemas Globais' },
+  { id: 'Editor & Ferramentas', label: 'Editor & Ferramentas' },
 ];
 
 export const PROJECT_SCRIPTS: ProjectScriptInfo[] = [
@@ -222,6 +263,145 @@ export const PROJECT_SCRIPTS: ProjectScriptInfo[] = [
     dependencies: ['IronManConfig', 'TargetDummy', 'AudioSystem'],
     keywords: ['ironman', 'unibeam', 'raio', 'peito', 'beam', 'dano'],
   },
+  {
+    id: 'ironman-dual-beam',
+    name: 'Feixes Duplos & Duelo de Feixes (Habilidade 2)',
+    filePath: '/src/game/abilities/ironman/IronManDualBeam.ts',
+    category: 'Habilidades',
+    character: 'ironman',
+    summary:
+      'Dois feixes contínuos das palmas com dano por tick, rastreamento de alvo e minigame Beam Clash quando o alvo rival responde com um feixe oposto.',
+    originalSource: ironManDualBeamSource,
+    fileExtension: 'ts',
+    dependencies: ['IronManConfig', 'IronManBeamClash', 'TargetDummy', 'AudioSystem'],
+    runtimeIntegration: 'restart-required',
+    keywords: ['ironman', 'feixe', 'beam', 'duplo', 'dual', 'clash', 'duelo'],
+  },
+  {
+    id: 'ironman-beam-clash',
+    name: 'Minigame Beam Clash (Duelo de Feixes)',
+    filePath: '/src/game/abilities/ironman/IronManBeamClash.ts',
+    category: 'Habilidades',
+    character: 'ironman',
+    summary:
+      'Estado e efeitos visuais do duelo de feixes: progresso oscilante, toques para empurrar, temporizador de 6 segundos e resolução com dano, explosão e cooldown rival.',
+    originalSource: ironManBeamClashSource,
+    fileExtension: 'ts',
+    dependencies: ['TargetDummy', 'AudioSystem'],
+    runtimeIntegration: 'restart-required',
+    keywords: ['ironman', 'beam', 'clash', 'duelo', 'feixes', 'minigame'],
+  },
+  {
+    id: 'ironman-spinning-lasers',
+    name: 'Lasers Giratórios (Habilidade 4)',
+    filePath: '/src/game/abilities/ironman/IronManSpinningLasers.ts',
+    category: 'Habilidades',
+    character: 'ironman',
+    summary:
+      'Quatro lasers rotativos que giram 720° ao redor do personagem, atingindo cada alvo uma única vez por ativação com duração configurável.',
+    originalSource: ironManSpinningLasersSource,
+    fileExtension: 'ts',
+    dependencies: ['IronManConfig', 'TargetDummy', 'AudioSystem'],
+    runtimeIntegration: 'restart-required',
+    keywords: ['ironman', 'laser', 'lasers', 'giratorio', 'spin', 'aoe'],
+  },
+
+  // ==========================================
+  // 1b. VOO & FÍSICA AÉREA (Arquitetura Compartilhada)
+  // ==========================================
+  {
+    id: 'flight-config',
+    name: 'Configuração de Voo por Personagem',
+    filePath: '/src/game/systems/flight/CharacterFlightConfig.ts',
+    category: 'Voo',
+    summary:
+      'Perfis editáveis de voo (Homem de Ferro, Agatha e clássico): hover, altitude máxima, velocidade, aceleração, resposta de curva, gravidade, estilo visual e duração.',
+    originalSource: flightConfigSource,
+    fileExtension: 'ts',
+    dependencies: [],
+    runtimeIntegration: 'hot-swap',
+    keywords: ['voo', 'flight', 'config', 'perfil', 'hover', 'altitude', 'velocidade'],
+  },
+  {
+    id: 'flight-system',
+    name: 'Sistema Central de Voo',
+    filePath: '/src/game/systems/flight/FlightSystem.ts',
+    category: 'Voo',
+    summary:
+      'Física única de voo: ativação, subida/descida, hover, aterrissagem suave, limites de altitude, colisão com tetos e duração máxima por perfil.',
+    originalSource: flightSystemSource,
+    fileExtension: 'ts',
+    dependencies: ['CharacterFlightConfig', 'CollisionSystem'],
+    runtimeIntegration: 'restart-required',
+    keywords: ['voo', 'flight', 'sistema', 'fisica', 'altitude', 'aterrissagem'],
+  },
+  {
+    id: 'flight-ability',
+    name: 'Ativação de Voo & Restrições',
+    filePath: '/src/game/systems/flight/CharacterFlightAbility.ts',
+    category: 'Voo',
+    summary:
+      'Camada de ativação por personagem com bloqueios NoFlight/Stunned, interrupção, pulo de jump pads e eventos de início/fim de voo.',
+    originalSource: flightAbilitySource,
+    fileExtension: 'ts',
+    dependencies: ['FlightSystem', 'CharacterFlightConfig', 'GameplayRestrictions'],
+    runtimeIntegration: 'restart-required',
+    keywords: ['voo', 'flight', 'ativacao', 'restricoes', 'stun', 'jump pad'],
+  },
+  {
+    id: 'flight-animation',
+    name: 'Animação de Voo',
+    filePath: '/src/game/systems/flight/CharacterFlightAnimation.ts',
+    category: 'Voo',
+    summary:
+      'Pose procedural de voo com estilo repulsor (Homem de Ferro) ou arcano (Agatha), incluindo inclinação, pernas, braços e resposta à velocidade.',
+    originalSource: flightAnimationSource,
+    fileExtension: 'ts',
+    dependencies: ['StickmanRig', 'CharacterFlightConfig'],
+    runtimeIntegration: 'restart-required',
+    keywords: ['voo', 'flight', 'animacao', 'pose', 'repulsor', 'arcano'],
+  },
+  {
+    id: 'flight-vfx',
+    name: 'Efeitos Visuais de Voo',
+    filePath: '/src/game/systems/flight/CharacterFlightVFX.ts',
+    category: 'Voo',
+    summary:
+      'Propulsores das mãos/pés com intensidade dinâmica ou aura arcana de partículas, reagindo a dash, velocidade e cor personalizada.',
+    originalSource: flightVfxSource,
+    fileExtension: 'ts',
+    dependencies: ['StickmanRig', 'VFXSystem', 'CharacterFlightConfig'],
+    runtimeIntegration: 'restart-required',
+    keywords: ['voo', 'flight', 'vfx', 'thruster', 'aura', 'particulas'],
+  },
+  {
+    id: 'ironman-flight',
+    name: 'Voo do Homem de Ferro',
+    filePath: '/src/game/abilities/ironman/IronManFlight.ts',
+    category: 'Voo',
+    character: 'ironman',
+    summary:
+      'Identidade de voo repulsor do Homem de Ferro, conectando o FlightSystem compartilhado ao áudio de propulsores e ao estilo de animação.',
+    originalSource: ironManFlightSource,
+    fileExtension: 'ts',
+    dependencies: ['FlightSystem', 'CharacterFlightAbility', 'AudioSystem'],
+    runtimeIntegration: 'restart-required',
+    keywords: ['ironman', 'voo', 'flight', 'repulsor', 'propulsor'],
+  },
+  {
+    id: 'agatha-flight',
+    name: 'Voo Arcano da Agatha',
+    filePath: '/src/game/abilities/agatha/AgathaFlight.ts',
+    category: 'Voo',
+    character: 'agatha',
+    summary:
+      'Identidade de voo arcano da Agatha, usando o FlightSystem compartilhado com áudio mágico e sinalização de levitação para as habilidades.',
+    originalSource: agathaFlightSource,
+    fileExtension: 'ts',
+    dependencies: ['FlightSystem', 'CharacterFlightAbility', 'AudioSystem'],
+    runtimeIntegration: 'restart-required',
+    keywords: ['agatha', 'voo', 'flight', 'arcano', 'levitacao'],
+  },
 
   // ==========================================
   // 2. CONFIGURAÇÕES AJUSTÁVEIS (Parâmetros)
@@ -279,7 +459,17 @@ export const PROJECT_SCRIPTS: ProjectScriptInfo[] = [
       'Coordenador de armas do Homem de Ferro: feixes contínuos, micro-mísseis, Unibeam, lasers giratórios e o minigame Beam Clash.',
     originalSource: ironManAbilitiesSource,
     fileExtension: 'ts',
-    dependencies: ['StickmanRig', 'TargetDummy', 'AudioSystem'],
+    dependencies: [
+      'IronManRepulsor',
+      'IronManMicroMissiles',
+      'IronManUnibeam',
+      'IronManDualBeam',
+      'IronManBeamClash',
+      'IronManSpinningLasers',
+      'IronManConfig',
+      'TargetDummy',
+      'AudioSystem',
+    ],
     keywords: ['ironman', 'homem de ferro', 'controlador', 'controller', 'armas'],
   },
   {
@@ -507,5 +697,262 @@ export const PROJECT_SCRIPTS: ProjectScriptInfo[] = [
     dependencies: [],
     runtimeIntegration: 'restart-required',
     keywords: ['audio', 'som', 'sons', 'volume', 'sintetizador', 'web audio'],
+  },
+
+  // ==========================================
+  // 8. SISTEMAS COMPARTILHADOS (Ponte de runtime)
+  // ==========================================
+  {
+    id: 'damage-system',
+    name: 'Sistema de Dano Compartilhado',
+    filePath: '/src/game/systems/DamageSystem.ts',
+    category: 'Sistemas',
+    summary:
+      'Resolve o dano de todas as habilidades: imunidade (Invulnerable), mitigação de escudo (IsShield) e decisão de recuo (Anchored). Usado por TargetDummy e pelos callbacks de impacto.',
+    originalSource: damageSystemSource,
+    fileExtension: 'ts',
+    dependencies: ['GameplayRestrictions'],
+    runtimeIntegration: 'restart-required',
+    keywords: ['dano', 'damage', 'escudo', 'shield', 'invulneravel', 'knockback', 'recuo'],
+  },
+  {
+    id: 'health-system',
+    name: 'Sistema de Vida & Morte',
+    filePath: '/src/game/systems/HealthSystem.ts',
+    category: 'Sistemas',
+    summary:
+      'Clamping de vida, aplicação de dano/cura, detecção de morte e razão de vida usada pelas barras de HUD.',
+    originalSource: healthSystemSource,
+    fileExtension: 'ts',
+    dependencies: [],
+    runtimeIntegration: 'restart-required',
+    keywords: ['vida', 'health', 'morte', 'cura', 'heal', 'hp'],
+  },
+  {
+    id: 'collision-system',
+    name: 'Sistema de Colisão com Estruturas',
+    filePath: '/src/game/systems/CollisionSystem.ts',
+    category: 'Sistemas',
+    summary:
+      'Expansão de caixas de colisão e testes de bloqueio por raio/altura, além da distância livre por varredura. Usado por movimento, dash e Passo das Sombras.',
+    originalSource: collisionSystemSource,
+    fileExtension: 'ts',
+    dependencies: [],
+    runtimeIntegration: 'restart-required',
+    keywords: ['colisao', 'collision', 'caixa', 'box', 'estrutura', 'teleporte'],
+  },
+  {
+    id: 'targeting-system',
+    name: 'Sistema de Alvos & Assistência de Mira',
+    filePath: '/src/game/systems/TargetingSystem.ts',
+    category: 'Sistemas',
+    summary:
+      'Seleciona o alvo mais alinhado à câmera dentro de um cone/distância e resolve o ponto de mira efetivo para as habilidades.',
+    originalSource: targetingSystemSource,
+    fileExtension: 'ts',
+    dependencies: ['TargetDummy'],
+    runtimeIntegration: 'restart-required',
+    keywords: ['mira', 'alvo', 'target', 'aim assist', 'assistencia', 'travamento'],
+  },
+  {
+    id: 'camera-system',
+    name: 'Sistema de Câmera & Tremor',
+    filePath: '/src/game/systems/CameraSystem.ts',
+    category: 'Sistemas',
+    summary:
+      'Vetores de órbita da câmera (terceira pessoa e modo construção) e o cálculo do tremor de tela com decaimento.',
+    originalSource: cameraSystemSource,
+    fileExtension: 'ts',
+    dependencies: [],
+    runtimeIntegration: 'restart-required',
+    keywords: ['camera', 'orbita', 'shake', 'tremor', 'build mode', 'terceira pessoa'],
+  },
+  {
+    id: 'cooldown-system',
+    name: 'Sistema de Recarga (Cooldown)',
+    filePath: '/src/game/systems/CooldownSystem.ts',
+    category: 'Sistemas',
+    summary:
+      'Registro nomeado de recargas com gate, progresso e decremento por frame. Usado pelo dash e disponível para habilidades.',
+    originalSource: cooldownSystemSource,
+    fileExtension: 'ts',
+    dependencies: [],
+    runtimeIntegration: 'restart-required',
+    keywords: ['cooldown', 'recarga', 'dash', 'gate', 'progresso'],
+  },
+  {
+    id: 'vfx-system',
+    name: 'Sistema de Efeitos Visuais (VFX)',
+    filePath: '/src/game/systems/VFXSystem.ts',
+    category: 'Sistemas',
+    summary:
+      'Orquestra impactos, destruições e teleportes sobre o emissor de partículas com cores por conjunto de poderes.',
+    originalSource: vfxSystemSource,
+    fileExtension: 'ts',
+    dependencies: [],
+    runtimeIntegration: 'restart-required',
+    keywords: ['vfx', 'efeitos', 'particulas', 'explosao', 'impacto', 'teleporte'],
+  },
+
+  // ==========================================
+  // 9. INTERFACE, SHELL E EDITOR
+  // ==========================================
+  {
+    id: 'app-shell',
+    name: 'Shell da Aplicação & HUD (App)',
+    filePath: '/src/App.tsx',
+    category: 'Interface & HUD',
+    summary:
+      'Componente raiz: monta a cena 3D, joystick, botões de combate, mira, modais e roteia o Build Mode. Alterações exigem rebuild.',
+    originalSource: appSource,
+    fileExtension: 'tsx',
+    dependencies: ['GameScene', 'ScriptRuntimeEngine', 'SettingsManager', 'AudioSystem'],
+    runtimeIntegration: 'restart-required',
+    keywords: ['app', 'shell', 'hud', 'raiz', 'montagem', 'roteamento'],
+  },
+  {
+    id: 'build-mode-container',
+    name: 'Interface do Modo Construção',
+    filePath: '/src/components/BuildMode/BuildModeContainer.tsx',
+    category: 'Interface & HUD',
+    summary:
+      'Editor de scripts de três painéis: catálogo, editor de código com destaque e painel de contexto (diagnóstico, restrições, histórico).',
+    originalSource: buildModeContainerSource,
+    fileExtension: 'tsx',
+    dependencies: ['ScriptRuntimeEngine', 'RealProjectScripts', 'ScriptSearch', 'ConfigPanel', 'BuildToast'],
+    runtimeIntegration: 'restart-required',
+    keywords: ['build mode', 'editor', 'painel', 'script', 'catalogo', 'diagnostico'],
+  },
+  {
+    id: 'config-panel',
+    name: 'Painel de Ajustes ao Vivo',
+    filePath: '/src/components/BuildMode/ConfigPanel.tsx',
+    category: 'Interface & HUD',
+    summary:
+      'Controles em tempo real de câmera, combate, personagens e sistema ligados ao LiveConfigManager.',
+    originalSource: configPanelSource,
+    fileExtension: 'tsx',
+    dependencies: ['LiveConfigManager', 'SettingsManager'],
+    runtimeIntegration: 'restart-required',
+    keywords: ['ajustes', 'config', 'live config', 'camera', 'combate', 'painel'],
+  },
+  {
+    id: 'build-toast',
+    name: 'Notificações do Editor (Toast)',
+    filePath: '/src/components/BuildMode/BuildToast.tsx',
+    category: 'Interface & HUD',
+    summary: 'Componente de notificações temporárias do editor de scripts.',
+    originalSource: buildToastSource,
+    fileExtension: 'tsx',
+    dependencies: [],
+    runtimeIntegration: 'restart-required',
+    keywords: ['toast', 'notificacao', 'editor', 'aviso'],
+  },
+
+  // ==========================================
+  // 10. FERRAMENTAS INTERNAS (Somente leitura)
+  // ==========================================
+  {
+    id: 'build-types',
+    name: 'Tipos do Modo Construção',
+    filePath: '/src/game/BuildTypes.ts',
+    category: 'Editor & Ferramentas',
+    summary:
+      'Tipos serializáveis da cena de construção (entidades, transformações, defaults) compartilhados entre editor e exportação.',
+    originalSource: buildTypesSource,
+    fileExtension: 'ts',
+    dependencies: [],
+    runtimeIntegration: 'restart-required',
+    keywords: ['tipos', 'types', 'build', 'serializado', 'entidade'],
+  },
+  {
+    id: 'script-runtime-engine',
+    name: 'Motor de Runtime de Scripts',
+    filePath: '/src/game/ScriptRuntimeEngine.ts',
+    category: 'Editor & Ferramentas',
+    summary:
+      'Pipeline de compilação, validação, integração, hot-swap, histórico e persistência dos scripts. Núcleo do editor.',
+    originalSource: scriptRuntimeEngineSource,
+    fileExtension: 'ts',
+    dependencies: ['RealProjectScripts', 'ScriptPersistence', 'AppliedScriptStore'],
+    runtimeIntegration: 'read-only',
+    keywords: ['engine', 'runtime', 'hot-swap', 'compilacao', 'integracao', 'motor'],
+  },
+  {
+    id: 'script-persistence',
+    name: 'Persistência de Scripts',
+    filePath: '/src/game/ScriptPersistence.ts',
+    category: 'Editor & Ferramentas',
+    summary:
+      'Camada de persistência (IndexedDB + espelho local) das versões, rascunhos e histórico de cada script.',
+    originalSource: scriptPersistenceSource,
+    fileExtension: 'ts',
+    dependencies: [],
+    runtimeIntegration: 'read-only',
+    keywords: ['persistencia', 'indexeddb', 'historico', 'versao', 'rascunho'],
+  },
+  {
+    id: 'applied-script-store',
+    name: 'Store de Scripts Aplicados',
+    filePath: '/src/game/AppliedScriptStore.ts',
+    category: 'Editor & Ferramentas',
+    summary:
+      'Estado autoritativo dos scripts aplicados (servidor/overlay Vite) com fallback ao bundle e sincronização entre abas.',
+    originalSource: appliedScriptStoreSource,
+    fileExtension: 'ts',
+    dependencies: ['ScriptPersistence'],
+    runtimeIntegration: 'read-only',
+    keywords: ['applied', 'store', 'overlay', 'sincronizacao', 'servidor'],
+  },
+  {
+    id: 'script-search',
+    name: 'Busca & Realce de Código',
+    filePath: '/src/game/ScriptSearch.ts',
+    category: 'Editor & Ferramentas',
+    summary:
+      'Indexação por palavras-chave e destaque de sintaxe TypeScript usado pelo editor.',
+    originalSource: scriptSearchSource,
+    fileExtension: 'ts',
+    dependencies: ['RealProjectScripts'],
+    runtimeIntegration: 'read-only',
+    keywords: ['busca', 'search', 'destaque', 'syntax', 'realce'],
+  },
+  {
+    id: 'project-exporter',
+    name: 'Exportador do Projeto (ZIP)',
+    filePath: '/src/game/ProjectExporter.ts',
+    category: 'Editor & Ferramentas',
+    summary:
+      'Monta o MeuJogo-Source.zip com o código real, manifesto (schema 3), versões aplicadas e validação do arquivo.',
+    originalSource: projectExporterSource,
+    fileExtension: 'ts',
+    dependencies: ['ScriptRuntimeEngine', 'BuildTypes'],
+    runtimeIntegration: 'read-only',
+    keywords: ['export', 'zip', 'manifesto', 'projeto', 'download'],
+  },
+  {
+    id: 'build-mode-defaults',
+    name: 'Cena de Construção Padrão (Gerado)',
+    filePath: '/src/game/generated/BuildModeDefaults.ts',
+    category: 'Editor & Ferramentas',
+    summary: 'Cena inicial gerada do Modo Construção. Arquivo gerado — somente leitura.',
+    originalSource: buildModeDefaultsSource,
+    fileExtension: 'ts',
+    dependencies: ['BuildTypes'],
+    runtimeIntegration: 'read-only',
+    keywords: ['gerado', 'default', 'cena', 'build mode'],
+  },
+  {
+    id: 'build-script-overrides',
+    name: 'Overrides do Build (Gerado)',
+    filePath: '/src/game/generated/BuildScriptOverrides.ts',
+    category: 'Editor & Ferramentas',
+    summary:
+      'Aplica overrides de configuração exportados no build instalado. Arquivo gerado — somente leitura.',
+    originalSource: buildScriptOverridesSource,
+    fileExtension: 'ts',
+    dependencies: ['LiveConfigManager', 'SettingsManager', 'AgathaConfig', 'IronManConfig'],
+    runtimeIntegration: 'read-only',
+    keywords: ['gerado', 'override', 'build', 'configuracao'],
   },
 ];

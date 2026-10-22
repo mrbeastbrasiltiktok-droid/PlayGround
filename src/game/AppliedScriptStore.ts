@@ -44,7 +44,8 @@ const CHANNEL_NAME = 'stickman_applied_scripts_v1';
 const FETCH_TIMEOUT_MS = 1800;
 
 let loadedState: AppliedScriptState = normalizeState(appliedSnapshot);
-let loadedFrom: 'server' | 'bundle' = 'bundle';
+let loadedFrom: 'server' | 'bundle' | 'browser' = 'bundle';
+let serverState: AppliedScriptState = normalizeState(null);
 let serverHashes = new Map<string, string>();
 const listeners = new Set<(entry: AppliedScriptRecord | null) => void>();
 const channel =
@@ -54,7 +55,7 @@ if (channel) {
   channel.onmessage = (event: MessageEvent) => {
     const entry = event.data?.entry as AppliedScriptRecord | undefined;
     if (event.data?.type === 'applied' && entry?.id) {
-      mergeEntry(entry);
+      mergeEntry(entry, false);
       listeners.forEach((listener) => listener(entry));
     }
     if (event.data?.type === 'removed' && typeof event.data?.id === 'string') {
@@ -110,7 +111,7 @@ function normalizeState(value: unknown): AppliedScriptState {
   };
 }
 
-function mergeEntry(entry: AppliedScriptRecord): void {
+function mergeEntry(entry: AppliedScriptRecord, fromServer = false): void {
   const existing = loadedState.scripts.find((item) => item.id === entry.id);
   if (existing && existing.updatedAt > entry.updatedAt) return;
   loadedState = {
@@ -119,7 +120,15 @@ function mergeEntry(entry: AppliedScriptRecord): void {
       a.id.localeCompare(b.id)
     ),
   };
-  serverHashes.set(entry.id, entry.hash);
+  if (fromServer) {
+    serverState = {
+      ...serverState,
+      scripts: [entry, ...serverState.scripts.filter((item) => item.id !== entry.id)].sort((a, b) =>
+        a.id.localeCompare(b.id)
+      ),
+    };
+    serverHashes.set(entry.id, entry.hash);
+  }
 }
 
 async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
@@ -141,6 +150,7 @@ export async function loadAppliedScripts(): Promise<{
   source: 'server' | 'bundle';
 }> {
   const bundled = normalizeState(appliedSnapshot);
+  serverState = normalizeState(null);
   try {
     const response = await fetchWithTimeout(`${ENDPOINT}?t=${Date.now()}`, {
       method: 'GET',
@@ -150,6 +160,7 @@ export async function loadAppliedScripts(): Promise<{
     const contentType = response.headers.get('content-type') || '';
     if (response.ok && contentType.includes('application/json')) {
       const parsed = normalizeState(await response.json());
+      serverState = parsed;
       const liveWins = parsed.updatedAt >= bundled.updatedAt;
       loadedState = liveWins ? parsed : {
         version: 1,
@@ -157,7 +168,7 @@ export async function loadAppliedScripts(): Promise<{
         scripts: mergeById(parsed.scripts, bundled.scripts),
       };
       loadedFrom = 'server';
-      serverHashes = new Map(loadedState.scripts.map((entry) => [entry.id, entry.hash]));
+      serverHashes = new Map(parsed.scripts.map((entry) => [entry.id, entry.hash]));
       return { state: loadedState, source: 'server' };
     }
   } catch {
@@ -189,12 +200,21 @@ export function getAppliedStateSnapshot(): AppliedScriptState {
   return loadedState;
 }
 
-export function getAppliedSource(): 'server' | 'bundle' {
+export function getAppliedSource(): 'server' | 'bundle' | 'browser' {
   return loadedFrom;
 }
 
 export function getAppliedBaseHash(id: string): string | undefined {
   return serverHashes.get(id);
+}
+
+/** The last state actually returned by the persistence endpoint (not merged). */
+export function getAppliedServerEntry(id: string): AppliedScriptRecord | undefined {
+  return serverState.scripts.find((entry) => entry.id === id);
+}
+
+export function getAppliedServerSnapshot(): AppliedScriptState {
+  return serverState;
 }
 
 export function subscribeAppliedChanges(
@@ -226,7 +246,10 @@ export async function persistAppliedScript(
     });
     const contentType = response.headers.get('content-type') || '';
     if (!contentType.includes('application/json')) {
-      return { ok: false, source: 'browser', message: 'Servidor de versões aplicadas indisponível.' };
+      mergeEntry(normalized, false);
+      loadedFrom = 'browser';
+      postChannel('applied', { entry: normalized });
+      return { ok: false, source: 'browser', message: 'Servidor de versões aplicadas indisponível; versão aplicada mantida e sincronizada apenas entre abas deste navegador.' };
     }
     const payload = (await response.json()) as {
       ok?: boolean;
@@ -237,7 +260,7 @@ export async function persistAppliedScript(
       code?: string;
     };
     if (response.status === 409) {
-      if (payload.current) mergeEntry(payload.current);
+      if (payload.current) mergeEntry(payload.current, true);
       return {
         ok: false,
         conflict: true,
@@ -246,20 +269,38 @@ export async function persistAppliedScript(
       };
     }
     if (!response.ok || !payload.ok) {
-      return { ok: false, source: 'server', message: payload.error || 'Falha ao persistir versão aplicada.' };
+      mergeEntry(normalized, false);
+      loadedFrom = 'browser';
+      postChannel('applied', { entry: normalized });
+      return { ok: false, source: 'server', message: payload.error || 'Falha ao persistir versão aplicada no servidor; versão mantida neste navegador.' };
     }
     const saved = normalizeEntry(payload.entry) || normalized;
-    mergeEntry(saved);
+    mergeEntry(saved, true);
     loadedFrom = 'server';
     postChannel('applied', { entry: saved });
     return { ok: true, entry: saved, source: 'server' };
   } catch {
+    mergeEntry(normalized, false);
+    loadedFrom = 'browser';
+    postChannel('applied', { entry: normalized });
     return {
       ok: false,
       source: 'browser',
-      message: 'Servidor indisponível; versão aplicada mantida apenas neste navegador.',
+      message: 'Servidor indisponível; versão aplicada mantida e sincronizada apenas entre abas deste navegador.',
     };
   }
+}
+
+function removeFromMemory(id: string): void {
+  loadedState = {
+    ...loadedState,
+    scripts: loadedState.scripts.filter((entry) => entry.id !== id),
+  };
+  serverState = {
+    ...serverState,
+    scripts: serverState.scripts.filter((entry) => entry.id !== id),
+  };
+  postChannel('removed', { id });
 }
 
 export async function removeAppliedScript(
@@ -275,7 +316,9 @@ export async function removeAppliedScript(
     });
     const contentType = response.headers.get('content-type') || '';
     if (!contentType.includes('application/json')) {
-      return { ok: false, source: 'browser', message: 'Servidor de versões aplicadas indisponível.' };
+      removeFromMemory(id);
+      loadedFrom = 'browser';
+      return { ok: false, source: 'browser', message: 'Servidor de versões aplicadas indisponível; versão removida apenas neste navegador e nas abas conectadas.' };
     }
     const payload = (await response.json()) as {
       ok?: boolean;
@@ -283,7 +326,10 @@ export async function removeAppliedScript(
       current?: AppliedScriptRecord;
     };
     if (response.status === 409) {
-      if (payload.current) mergeEntry(payload.current);
+      if (payload.current) {
+        mergeEntry(payload.current, true);
+        serverHashes.set(payload.current.id, payload.current.hash);
+      }
       return {
         ok: false,
         conflict: true,
@@ -292,20 +338,20 @@ export async function removeAppliedScript(
       };
     }
     if (!response.ok || !payload.ok) {
-      return { ok: false, source: 'server', message: payload.error || 'Falha ao remover versão aplicada.' };
+      removeFromMemory(id);
+      loadedFrom = 'browser';
+      return { ok: false, source: 'server', message: payload.error || 'Falha ao remover versão aplicada no servidor; removida apenas neste navegador.' };
     }
-    loadedState = {
-      ...loadedState,
-      scripts: loadedState.scripts.filter((entry) => entry.id !== id),
-    };
+    removeFromMemory(id);
     serverHashes.delete(id);
-    postChannel('removed', { id });
     return { ok: true, source: 'server' };
   } catch {
+    removeFromMemory(id);
+    loadedFrom = 'browser';
     return {
       ok: false,
       source: 'browser',
-      message: 'Servidor indisponível; removida apenas neste navegador.',
+      message: 'Servidor indisponível; versão removida apenas neste navegador e nas abas conectadas.',
     };
   }
 }

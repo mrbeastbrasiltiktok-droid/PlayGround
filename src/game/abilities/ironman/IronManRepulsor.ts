@@ -1,7 +1,8 @@
 /**
  * IronManRepulsor.ts
- * Independent Basic Attack Ability Module for Iron Man.
- * Fires alternating plasma repulsor bolts from palm nodes with high velocity and impact sparks.
+ * Independent Basic Attack ability module for Iron Man.
+ * Alternates palm repulsor bolts with homing, impact explosions and miss sparks.
+ * This is the real implementation used by the active game (hot-swappable).
  */
 
 import * as THREE from 'three';
@@ -10,7 +11,7 @@ import { StickmanNodes } from '../../StickmanRig';
 import { audioSystem } from '../../AudioSystem';
 import { activeIronManConfig } from './IronManConfig';
 
-export interface RepulsorBoltInstance {
+export interface RepulsorBolt {
   mesh: THREE.Group;
   pos: THREE.Vector3;
   vel: THREE.Vector3;
@@ -21,29 +22,48 @@ export interface RepulsorBoltInstance {
   isDead: boolean;
 }
 
+export type IronManExplosionCallback = (
+  pos: THREE.Vector3,
+  radius: number,
+  color?: number
+) => void;
+
 export class IronManRepulsor {
   private scene: THREE.Scene;
   private stickman: StickmanNodes;
   private getAimDestination: () => { pos: THREE.Vector3; target: TargetDummy | null };
   private onDamageDealt: (dummy: TargetDummy, dmg: number, hitPos: THREE.Vector3, knockback?: THREE.Vector3) => void;
   private onShake: (amount: number) => void;
+  private getCustomColor?: () => string | null;
+  private onExplosion?: IronManExplosionCallback;
   public onRepulsorFired?: (hand: 'left' | 'right', aimPitch: number) => void;
 
   private currentHand: 'left' | 'right' = 'right';
-  private bolts: RepulsorBoltInstance[] = [];
+  private bolts: RepulsorBolt[] = [];
 
   constructor(
     scene: THREE.Scene,
     stickman: StickmanNodes,
     getAimDestination: () => { pos: THREE.Vector3; target: TargetDummy | null },
     onDamageDealt: (dummy: TargetDummy, dmg: number, hitPos: THREE.Vector3, knockback?: THREE.Vector3) => void,
-    onShake: (amount: number) => void
+    onShake: (amount: number) => void,
+    getCustomColor?: () => string | null,
+    onExplosion?: IronManExplosionCallback
   ) {
     this.scene = scene;
     this.stickman = stickman;
     this.getAimDestination = getAimDestination;
     this.onDamageDealt = onDamageDealt;
     this.onShake = onShake;
+    this.getCustomColor = getCustomColor;
+    this.onExplosion = onExplosion;
+  }
+
+  private resolveCustomColor(fallback: number): number {
+    const custom = this.getCustomColor?.();
+    if (!custom) return fallback;
+    const parsed = parseInt(custom.replace('#', ''), 16);
+    return Number.isFinite(parsed) ? parsed : fallback;
   }
 
   public fire(aimPitch: number = 0): boolean {
@@ -64,27 +84,26 @@ export class IronManRepulsor {
 
     const group = new THREE.Group();
 
-    // Laser core cylinder
-    const coreGeo = new THREE.CylinderGeometry(0.06, 0.06, 0.9, 8);
+    const coreGeo = new THREE.CylinderGeometry(0.07, 0.07, 0.75, 12);
     const coreMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
     const core = new THREE.Mesh(coreGeo, coreMat);
     core.rotation.x = Math.PI / 2;
     group.add(core);
 
-    // Cyan plasma aura
-    const auraGeo = new THREE.CylinderGeometry(0.2, 0.2, 1.1, 10);
-    const auraMat = new THREE.MeshBasicMaterial({
-      color: cfg.beamColor,
+    const glowColorHex = this.resolveCustomColor(cfg.beamColor);
+    const glowGeo = new THREE.CylinderGeometry(0.22, 0.22, 0.95, 12);
+    const glowMat = new THREE.MeshBasicMaterial({
+      color: glowColorHex,
       transparent: true,
-      opacity: 0.85,
-      blending: THREE.AdditiveBlending,
+      opacity: 0.75,
       depthWrite: false,
     });
-    const aura = new THREE.Mesh(auraGeo, auraMat);
-    aura.rotation.x = Math.PI / 2;
-    group.add(aura);
+    const glow = new THREE.Mesh(glowGeo, glowMat);
+    glow.rotation.x = Math.PI / 2;
+    group.add(glow);
 
-    const light = new THREE.PointLight(cfg.beamColor, 3.0, 6.0);
+    const lightColorHex = this.resolveCustomColor(cfg.glowColor);
+    const light = new THREE.PointLight(lightColorHex, 2.8, 4.5);
     group.add(light);
 
     group.position.copy(handPos);
@@ -103,7 +122,7 @@ export class IronManRepulsor {
     });
 
     audioSystem.playRepulsor();
-    this.onShake(0.02);
+    this.onShake(0.015);
 
     return true;
   }
@@ -119,42 +138,44 @@ export class IronManRepulsor {
         continue;
       }
 
-      if (bolt.target && !bolt.target.isDead) {
-        const toTarget = bolt.target.getCenter().sub(bolt.pos).normalize();
-        bolt.vel.lerp(toTarget.multiplyScalar(cfg.speed), Math.min(1.0, dt * bolt.homingStrength));
+      if (bolt.target && !bolt.target.isDead && bolt.homingStrength > 0) {
+        const dest = bolt.target.getCenter();
+        const dir = dest.clone().sub(bolt.pos).normalize();
+        bolt.vel.lerp(dir.multiplyScalar(cfg.speed), dt * bolt.homingStrength);
       }
 
-      bolt.pos.add(bolt.vel.clone().multiplyScalar(dt));
+      bolt.pos.addScaledVector(bolt.vel, dt);
       bolt.mesh.position.copy(bolt.pos);
       bolt.mesh.lookAt(bolt.pos.clone().add(bolt.vel));
 
-      if (bolt.pos.distanceTo(bolt.startPos) > bolt.maxRange || bolt.pos.y < -2.0) {
-        bolt.isDead = true;
-        this.scene.remove(bolt.mesh);
-        this.bolts.splice(i, 1);
-        continue;
-      }
-
+      let hit = false;
       for (const dummy of dummies) {
         if (dummy.isDead) continue;
-        if (bolt.pos.distanceTo(dummy.getCenter()) < 1.35) {
-          const knockback = bolt.vel.clone().normalize().multiplyScalar(5.0);
-          knockback.y = 2.0;
-          this.onDamageDealt(dummy, cfg.damage, bolt.pos.clone(), knockback);
+        if (bolt.pos.distanceTo(dummy.getCenter()) <= dummy.radius + 0.3) {
+          hit = true;
+          this.onDamageDealt(dummy, cfg.damage, bolt.pos.clone());
+          this.onExplosion?.(bolt.pos.clone(), 1.2, 0xff2233);
           audioSystem.playImpact();
-          this.onShake(0.03);
-          bolt.isDead = true;
-          this.scene.remove(bolt.mesh);
-          this.bolts.splice(i, 1);
           break;
         }
+      }
+
+      if (!hit && (bolt.pos.y <= 0.05 || bolt.pos.distanceTo(bolt.startPos) > bolt.maxRange)) {
+        hit = true;
+        this.onExplosion?.(bolt.pos.clone(), 0.8, 0xff3344);
+        audioSystem.playImpact();
+      }
+
+      if (hit) {
+        this.scene.remove(bolt.mesh);
+        this.bolts.splice(i, 1);
       }
     }
   }
 
   public dispose(): void {
-    for (const b of this.bolts) {
-      this.scene.remove(b.mesh);
+    for (const bolt of this.bolts) {
+      this.scene.remove(bolt.mesh);
     }
     this.bolts = [];
   }

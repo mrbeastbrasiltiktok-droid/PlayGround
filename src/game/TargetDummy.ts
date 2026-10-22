@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { audioSystem } from './AudioSystem';
-import { gameplayRestrictions } from './GameplayRestrictions';
+import { DamageSystem } from './systems/DamageSystem';
+import { HealthSystem } from './systems/HealthSystem';
 
 export interface FloatingDamageText {
   id: number;
@@ -224,7 +225,7 @@ export class TargetDummy {
     ctx.stroke();
 
     // Health fill percentage
-    const pct = Math.max(0, Math.min(1, this.health / this.maxHealth));
+    const pct = HealthSystem.ratio(this.health, this.maxHealth);
     const barWidth = (w - 12) * pct;
 
     if (barWidth > 0) {
@@ -276,18 +277,14 @@ export class TargetDummy {
   ): { killed: boolean; actualDamage: number } {
     if (this.isDead) return { killed: false, actualDamage: 0 };
 
-    // Invulnerability check
-    if (gameplayRestrictions.hasRestriction('Invulnerable')) {
+    // Mitigação centralizada (Invulnerável / Escudo) via DamageSystem
+    const resolution = DamageSystem.resolve(amount);
+    if (resolution.immune) {
       return { killed: false, actualDamage: 0 };
     }
 
-    let actualDamage = amount;
-    // Shield check (mitigates 50% damage)
-    if (gameplayRestrictions.hasRestriction('IsShield')) {
-      actualDamage = Math.max(1, Math.round(amount * 0.5));
-    }
-
-    this.health = Math.max(0, this.health - actualDamage);
+    const actualDamage = resolution.actualDamage;
+    this.health = HealthSystem.applyDamage(this.health, actualDamage);
     this.updateHealthBar();
 
     // Hit flash
@@ -297,7 +294,7 @@ export class TargetDummy {
     this.headMesh.material = this.hitMaterial;
 
     // Recoil impulse based on hit unless Anchored
-    if (!gameplayRestrictions.hasRestriction('Anchored')) {
+    if (resolution.appliesKnockback) {
       this.recoilVel = -5.5;
       if (knockback) {
         this.knockbackVel.add(knockback);
@@ -306,7 +303,7 @@ export class TargetDummy {
 
     audioSystem.playHit();
 
-    if (this.health <= 0) {
+    if (HealthSystem.isDead(this.health)) {
       this.die();
       return { killed: true, actualDamage };
     }

@@ -1,5 +1,10 @@
 import * as THREE from 'three';
 import { StickmanNodes } from './StickmanRig';
+import {
+  CharacterFlightAnimation,
+  type FlightPoseTargets,
+} from './systems/flight/CharacterFlightAnimation';
+import type { FlightStyle } from './systems/flight/CharacterFlightConfig';
 
 export class AnimationController {
   private nodes: StickmanNodes;
@@ -38,6 +43,7 @@ export class AnimationController {
   public isFlying: boolean = false;
   public flightBlend: number = 0; // 0 = ground, 1 = flying
   public flightRoll: number = 0; // banking into turns
+  public flightStyle: FlightStyle = 'repulsor';
   public isDashing: boolean = false;
 
   // Base pelvis height when standing
@@ -280,33 +286,48 @@ export class AnimationController {
     // ==========================================
     const fb = this.flightBlend;
     if (fb > 0.001) {
-      const flightLegPitch = -0.32 - (this.isDashing ? 0.45 : this.smoothedSpeed * 0.28);
-      n.leftHip.rotation.x = THREE.MathUtils.lerp(n.leftHip.rotation.x, flightLegPitch, fb);
-      n.rightHip.rotation.x = THREE.MathUtils.lerp(n.rightHip.rotation.x, flightLegPitch, fb);
-      n.leftKnee.rotation.x = THREE.MathUtils.lerp(n.leftKnee.rotation.x, -0.15, fb);
-      n.rightKnee.rotation.x = THREE.MathUtils.lerp(n.rightKnee.rotation.x, -0.15, fb);
-      n.leftAnkle.rotation.x = THREE.MathUtils.lerp(n.leftAnkle.rotation.x, 0.45, fb);
-      n.rightAnkle.rotation.x = THREE.MathUtils.lerp(n.rightAnkle.rotation.x, 0.45, fb);
+      const flightTargets: FlightPoseTargets = {
+        waistRotX: targetWaistRotX,
+        waistRotZ: targetWaistRotZ,
+        headRotX: targetHeadRotX,
+        leftShoulderRotX: targetLeftShoulderRotX,
+        leftShoulderRotZ: targetLeftShoulderRotZ,
+        leftElbowRotX: targetLeftElbowRotX,
+        leftWristRotX: targetLeftWristRotX,
+        rightShoulderRotX: targetRightShoulderRotX,
+        rightShoulderRotZ: targetRightShoulderRotZ,
+        rightElbowRotX: targetRightElbowRotX,
+        rightWristRotX: targetRightWristRotX,
+        pelvisRoll: 0,
+      };
 
-      if (!this.isAttacking && !this.isRepulsorActive && !this.dualBeamActive && !this.spinningLasersActive && !this.chaosOrbActive && !this.runicWardActive) {
-        const armFlightX = -0.36 - (this.isDashing ? 0.55 : this.smoothedSpeed * 0.32);
-        targetLeftShoulderRotX = THREE.MathUtils.lerp(targetLeftShoulderRotX, armFlightX, fb);
-        targetLeftShoulderRotZ = THREE.MathUtils.lerp(targetLeftShoulderRotZ, -0.24, fb);
-        targetLeftElbowRotX = THREE.MathUtils.lerp(targetLeftElbowRotX, 0.18, fb);
-        targetLeftWristRotX = THREE.MathUtils.lerp(targetLeftWristRotX, -0.24, fb);
+      CharacterFlightAnimation.apply(n, flightTargets, {
+        style: this.flightStyle,
+        blend: fb,
+        roll: this.flightRoll,
+        speed: this.smoothedSpeed,
+        dashing: this.isDashing,
+        lockArms:
+          this.isAttacking ||
+          this.isRepulsorActive ||
+          this.dualBeamActive ||
+          this.spinningLasersActive ||
+          this.chaosOrbActive ||
+          this.runicWardActive,
+      });
 
-        targetRightShoulderRotX = THREE.MathUtils.lerp(targetRightShoulderRotX, armFlightX, fb);
-        targetRightShoulderRotZ = THREE.MathUtils.lerp(targetRightShoulderRotZ, 0.24, fb);
-        targetRightElbowRotX = THREE.MathUtils.lerp(targetRightElbowRotX, 0.18, fb);
-        targetRightWristRotX = THREE.MathUtils.lerp(targetRightWristRotX, -0.24, fb);
-      }
-
-      const forwardLean = -0.36 * (this.isDashing ? 1.6 : Math.max(0.22, this.smoothedSpeed));
-      targetWaistRotX = THREE.MathUtils.lerp(targetWaistRotX, forwardLean, fb);
-      targetHeadRotX = THREE.MathUtils.lerp(targetHeadRotX, -forwardLean * 0.8, fb);
-
-      n.pelvis.rotation.z += this.flightRoll * fb;
-      targetWaistRotZ += this.flightRoll * 0.48 * fb;
+      targetWaistRotX = flightTargets.waistRotX;
+      targetWaistRotZ = flightTargets.waistRotZ;
+      targetHeadRotX = flightTargets.headRotX;
+      targetLeftShoulderRotX = flightTargets.leftShoulderRotX;
+      targetLeftShoulderRotZ = flightTargets.leftShoulderRotZ;
+      targetLeftElbowRotX = flightTargets.leftElbowRotX;
+      targetLeftWristRotX = flightTargets.leftWristRotX;
+      targetRightShoulderRotX = flightTargets.rightShoulderRotX;
+      targetRightShoulderRotZ = flightTargets.rightShoulderRotZ;
+      targetRightElbowRotX = flightTargets.rightElbowRotX;
+      targetRightWristRotX = flightTargets.rightWristRotX;
+      n.pelvis.rotation.z += flightTargets.pelvisRoll;
     }
 
     // ==========================================

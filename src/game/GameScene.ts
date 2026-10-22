@@ -8,9 +8,20 @@ import { AgathaAbilities } from './AgathaAbilities';
 import { audioSystem } from './AudioSystem';
 import { settingsManager, GameSettings, ReticlePosition } from './SettingsManager';
 import { BuildModeManager } from './BuildModeManager';
-import { liveConfigManager, LiveGameConfig } from './LiveConfigManager';
+import { DEFAULT_LIVE_CONFIG, liveConfigManager, LiveGameConfig } from './LiveConfigManager';
 import { scriptRuntimeEngine } from './ScriptRuntimeEngine';
 import { gameplayRestrictions } from './GameplayRestrictions';
+import { CollisionSystem } from './systems/CollisionSystem';
+import { TargetingSystem } from './systems/TargetingSystem';
+import { CameraSystem } from './systems/CameraSystem';
+import { CooldownSystem } from './systems/CooldownSystem';
+import { VFXSystem, VFX_COLORS } from './systems/VFXSystem';
+import { FlightSystem } from './systems/flight/FlightSystem';
+import { CharacterFlightAbility } from './systems/flight/CharacterFlightAbility';
+import { CharacterFlightVFX } from './systems/flight/CharacterFlightVFX';
+import { getFlightProfile } from './systems/flight/CharacterFlightConfig';
+import { IronManFlight } from './abilities/ironman/IronManFlight';
+import { AgathaFlight } from './abilities/agatha/AgathaFlight';
 
 export interface JoystickState {
   x: number; // -1 to 1
@@ -102,14 +113,20 @@ export class GameScene {
   private dashDuration: number = 0.22;
   public dashCooldownRemaining: number = 0;
   public dashCooldownTotal: number = 2.2;
+  private dashCooldowns: CooldownSystem = new CooldownSystem();
   private dashDir: THREE.Vector3 = new THREE.Vector3(0, 0, -1);
   private dashSpeed: number = 19.5;
 
-  // Controlled Flight State
+  // Shared Flight State (physics lives in FlightSystem)
   public isFlying: boolean = false;
-  private targetFlightY: number = 0;
-  private currentFlightY: number = 0;
+  public isFlyingLanding: boolean = false;
   private flightBankRoll: number = 0;
+  private flightVerticalInput: number = 0;
+  private flightSystem!: FlightSystem;
+  public ironManFlight!: IronManFlight;
+  public agathaFlight!: AgathaFlight;
+  private classicFlight!: CharacterFlightAbility;
+  private flightVfx: CharacterFlightVFX = new CharacterFlightVFX();
 
   // Camera follow state
   private cameraOffset: THREE.Vector3 = new THREE.Vector3(0, 2.3, 5.0);
@@ -216,30 +233,9 @@ export class GameScene {
     this.ironManAbilities = new IronManAbilities(
       this.scene,
       this.stickman,
-      () => {
-        if (this.settings.aimAssist && this.activeTarget && !this.activeTarget.isDead) {
-          return { pos: this.activeTarget.getCenter(), target: this.activeTarget };
-        }
-        return { pos: this.currentAimPoint.clone(), target: null };
-      },
-      (dummy, dmg, hitPos, kb) => {
-        const res = dummy.takeDamage(dmg, hitPos, kb);
-        if (res.actualDamage > 0) {
-          this.triggerHitConfirm();
-        }
-        this.projectileSystem.damageNumbers.push({
-          id: (this.projectileSystem as unknown as { nextDamageId: number }).nextDamageId++,
-          value: res.actualDamage,
-          worldPos: hitPos.clone().add(new THREE.Vector3(0, 0.4, 0)),
-          age: 0,
-          maxAge: 0.95,
-        });
-      },
-      (amt) => {
-        if (this.settings.cameraShake) {
-          this.addCameraShake(amt);
-        }
-      }
+      () => this.resolveAimSnapshot(),
+      (dummy, dmg, hitPos, kb) => this.handleDamageDealt(dummy, dmg, hitPos, kb),
+      (amt) => this.applyShake(amt)
     );
     this.ironManAbilities.onRepulsorFired = (hand, aimPitch) => {
       this.animController.triggerRepulsor(hand, aimPitch);
@@ -249,34 +245,36 @@ export class GameScene {
     this.agathaAbilities = new AgathaAbilities(
       this.scene,
       this.stickman,
-      () => {
-        if (this.settings.aimAssist && this.activeTarget && !this.activeTarget.isDead) {
-          return { pos: this.activeTarget.getCenter(), target: this.activeTarget };
-        }
-        return { pos: this.currentAimPoint.clone(), target: null };
-      },
-      (dummy, dmg, hitPos, kb) => {
-        const res = dummy.takeDamage(dmg, hitPos, kb);
-        if (res.actualDamage > 0) {
-          this.triggerHitConfirm();
-        }
-        this.projectileSystem.damageNumbers.push({
-          id: (this.projectileSystem as unknown as { nextDamageId: number }).nextDamageId++,
-          value: res.actualDamage,
-          worldPos: hitPos.clone().add(new THREE.Vector3(0, 0.4, 0)),
-          age: 0,
-          maxAge: 0.95,
-        });
-      },
-      (amt) => {
-        if (this.settings.cameraShake) {
-          this.addCameraShake(amt);
-        }
-      }
+      () => this.resolveAimSnapshot(),
+      (dummy, dmg, hitPos, kb) => this.handleDamageDealt(dummy, dmg, hitPos, kb),
+      (amt) => this.applyShake(amt)
     );
     this.agathaAbilities.onArcaneCast = (hand, aimPitch) => {
       this.animController.triggerRepulsor(hand, aimPitch);
     };
+
+    // 8c. Shared flight system + per-character flight identity modules
+    this.flightSystem = new FlightSystem({
+      getProfile: () => getFlightProfile(this.currentPowerSet),
+      getPlayerPosition: () => this.playerPos,
+      getStructures: () => this.structureBoxes,
+      getCollisionRadius: () => this.playerCollisionRadius,
+      canActivate: () => (
+        !gameplayRestrictions.hasRestriction('NoFlight') &&
+        !gameplayRestrictions.hasRestriction('Stunned')
+      ),
+      getSpeedMultiplier: () => this.flightMaxSpeed / DEFAULT_LIVE_CONFIG.flightMaxSpeed,
+    });
+    this.ironManFlight = new IronManFlight(this.flightSystem);
+    this.agathaFlight = new AgathaFlight(this.flightSystem, (active) => {
+      if (this.agathaAbilities) {
+        this.agathaAbilities.isArcaneFlightActive = active;
+      }
+    });
+    this.classicFlight = new CharacterFlightAbility('classic', this.flightSystem, {
+      onStart: () => audioSystem.playFlightToggle(true),
+      onStop: () => audioSystem.playFlightToggle(false),
+    });
 
     // 9. Apply initial graphics settings
     this.applyGraphicsSettings(this.settings.graphics);
@@ -429,18 +427,7 @@ export class GameScene {
 
       // Check collision with structure boxes plus dummy radius/clearance margin
       const dummyRadius = 1.1;
-      let intersects = false;
-      for (const box of this.structureBoxes) {
-        const expanded = box.clone();
-        expanded.min.subScalar(dummyRadius);
-        expanded.max.addScalar(dummyRadius);
-        if (expanded.containsPoint(pos)) {
-          intersects = true;
-          break;
-        }
-      }
-
-      if (!intersects) {
+      if (!CollisionSystem.isCircleBlocked(pos, this.structureBoxes, dummyRadius)) {
         valid = true;
       }
     }
@@ -460,10 +447,8 @@ export class GameScene {
         idx + 1,
         pos,
         (destroyPos) => {
-          this.projectileSystem.emitDestructionParticles(destroyPos);
-          if (this.settings.cameraShake) {
-            this.addCameraShake(0.24);
-          }
+          VFXSystem.playDestruction(this.projectileSystem, destroyPos);
+          this.applyShake(0.24);
         },
         () => this.getValidSpawnPosition()
       );
@@ -517,6 +502,48 @@ export class GameScene {
   public addCameraShake(intensity: number): void {
     if (!this.settings.cameraShake) return;
     this.shakeIntensity = Math.min(0.12, this.shakeIntensity + intensity * 0.35);
+  }
+
+  /** Resolve o alvo travado / ponto de mira livre via TargetingSystem. */
+  private resolveAimSnapshot(): { pos: THREE.Vector3; target: TargetDummy | null } {
+    return TargetingSystem.resolveAim(
+      this.activeTarget,
+      !!this.settings.aimAssist,
+      this.currentAimPoint
+    );
+  }
+
+  /** Ponto de entrada único de dano das habilidades (confirm + número). */
+  private handleDamageDealt(
+    dummy: TargetDummy,
+    dmg: number,
+    hitPos: THREE.Vector3,
+    kb?: THREE.Vector3
+  ): void {
+    const res = dummy.takeDamage(dmg, hitPos, kb);
+    if (res.actualDamage > 0) {
+      this.triggerHitConfirm();
+    }
+    this.projectileSystem.damageNumbers.push({
+      id: (this.projectileSystem as unknown as { nextDamageId: number }).nextDamageId++,
+      value: res.actualDamage,
+      worldPos: hitPos.clone().add(new THREE.Vector3(0, 0.4, 0)),
+      age: 0,
+      maxAge: 0.95,
+    });
+  }
+
+  /** Aplica tremor de tela respeitando a configuração do usuário. */
+  private applyShake(amount: number): void {
+    if (this.settings.cameraShake) {
+      this.addCameraShake(amount);
+    }
+  }
+
+  /** Inicia a recarga de dash via CooldownSystem e mantém o campo público. */
+  private startDashCooldown(): void {
+    this.dashCooldowns.start('dash', this.dashCooldownTotal);
+    this.dashCooldownRemaining = this.dashCooldowns.getRemaining('dash');
   }
 
   public setJoystickInput(x: number, y: number, active: boolean): void {
@@ -579,6 +606,7 @@ export class GameScene {
   public setPowerSet(set: 'classic' | 'ironman' | 'agatha'): void {
     this.currentPowerSet = set;
     this.animController.isAgatha = set === 'agatha';
+    this.animController.flightStyle = getFlightProfile(set).style;
     this.respawnPlayer();
   }
 
@@ -596,10 +624,17 @@ export class GameScene {
 
     // Reset flight and dash
     this.isFlying = false;
-    this.targetFlightY = 0;
-    this.currentFlightY = 0;
+    this.isFlyingLanding = false;
+    this.flightBankRoll = 0;
+    this.flightVerticalInput = 0;
+    this.flightSystem.reset();
+    this.flightVfx.reset();
+    if (this.agathaAbilities) {
+      this.agathaAbilities.isArcaneFlightActive = false;
+    }
     this.isDashing = false;
     this.dashTimer = 0;
+    this.dashCooldowns.reset('dash');
     this.dashCooldownRemaining = 0;
     this.animController.isFlying = false;
     this.animController.isDashing = false;
@@ -626,7 +661,7 @@ export class GameScene {
     this.stickman.thrusters.rightHand.setIntensity(0);
 
     // Particle spawn chime
-    this.projectileSystem.emitImpactParticles(new THREE.Vector3(0, 1, 0), 25, this.currentPowerSet === 'agatha' ? 0xa855f7 : 0x00f0ff);
+    VFXSystem.playTeleport(this.projectileSystem, new THREE.Vector3(0, 1, 0), this.currentPowerSet);
     if (this.currentPowerSet === 'agatha') {
       audioSystem.playShadowStep();
     } else {
@@ -795,7 +830,7 @@ export class GameScene {
   }
 
   public triggerDash(): boolean {
-    if (this.dashCooldownRemaining > 0) return false;
+    if (!this.dashCooldowns.isReady('dash')) return false;
 
     // Centralized gameplay restriction check
     if (
@@ -831,7 +866,7 @@ export class GameScene {
           }
         );
         if (success) {
-          this.dashCooldownRemaining = this.dashCooldownTotal;
+          this.startDashCooldown();
           return true;
         }
         return false;
@@ -844,7 +879,7 @@ export class GameScene {
     this.dashDir.copy(dir);
     this.isDashing = true;
     this.dashTimer = 0;
-    this.dashCooldownRemaining = this.dashCooldownTotal;
+    this.startDashCooldown();
 
     this.playerRotationY = Math.atan2(-dir.x, -dir.z);
 
@@ -857,26 +892,36 @@ export class GameScene {
     return true;
   }
 
+  public getActiveFlightAbility(): CharacterFlightAbility {
+    if (this.currentPowerSet === 'agatha') return this.agathaFlight;
+    if (this.currentPowerSet === 'ironman') return this.ironManFlight;
+    return this.classicFlight;
+  }
+
+  public getFlightSystem(): FlightSystem {
+    return this.flightSystem;
+  }
+
+  public setFlightVerticalInput(direction: number): void {
+    this.flightVerticalInput = THREE.MathUtils.clamp(direction, -1, 1);
+  }
+
   public toggleFlight(): boolean {
-    // Centralized gameplay restriction check
-    if (
-      gameplayRestrictions.hasRestriction('NoFlight') ||
-      gameplayRestrictions.hasRestriction('Stunned')
-    ) {
-      audioSystem.playError?.();
+    if (this.isBuildMode) return false;
+
+    const ability = this.getActiveFlightAbility();
+    const wasActive = this.flightSystem.isActive();
+    const activated = ability.toggle();
+
+    if (!activated && !wasActive && !this.flightSystem.isLanding()) {
+      if (!ability.canActivate()) {
+        audioSystem.playError?.();
+      }
       return false;
     }
 
-    this.isFlying = !this.isFlying;
-    this.targetFlightY = this.isFlying ? 3.6 : 0;
-    if (this.currentPowerSet === 'agatha') {
-      audioSystem.playArcaneFlight(this.isFlying);
-      if (this.agathaAbilities) {
-        this.agathaAbilities.isArcaneFlightActive = this.isFlying;
-      }
-    } else {
-      audioSystem.playFlightToggle(this.isFlying);
-    }
+    this.isFlying = this.flightSystem.isActive();
+    this.isFlyingLanding = this.flightSystem.isLanding();
     return this.isFlying;
   }
 
@@ -908,6 +953,7 @@ export class GameScene {
     this.joystick.active = false;
     this.joystick.x = 0;
     this.joystick.y = 0;
+    this.flightVerticalInput = 0;
   };
 
   private onResize = (): void => {
@@ -957,13 +1003,7 @@ export class GameScene {
       }
 
       // Smooth build camera orbit positioning around focus point
-      const cosP = Math.cos(this.buildCamPitch);
-      const sinP = Math.sin(this.buildCamPitch);
-      const camDir = new THREE.Vector3(
-        Math.sin(this.buildCamYaw) * cosP,
-        sinP,
-        Math.cos(this.buildCamYaw) * cosP
-      ).normalize();
+      const camDir = CameraSystem.buildOrbitDirection(this.buildCamYaw, this.buildCamPitch);
 
       const desiredPos = this.buildFocusPoint.clone().addScaledVector(camDir, this.buildCamDist);
       this.camera.position.lerp(desiredPos, 0.22);
@@ -978,18 +1018,8 @@ export class GameScene {
     gameplayRestrictions.update(dt);
 
     // 0. Update Dash Cooldown
-    if (this.dashCooldownRemaining > 0) {
-      this.dashCooldownRemaining = Math.max(0, this.dashCooldownRemaining - dt);
-    }
-
-    // 0b. Smooth Flight Altitude & Hover Bobbing
-    this.targetFlightY = this.isFlying ? 3.6 : 0;
-    this.currentFlightY = THREE.MathUtils.damp(this.currentFlightY, this.targetFlightY, 6.0, dt);
-    const hoverBob = this.isFlying ? Math.sin(performance.now() * 0.0035) * 0.12 : 0;
-    const chokeOffset = (this.currentPowerSet === 'agatha' && this.agathaAbilities)
-      ? this.agathaAbilities.chokeElevationOffset
-      : 0;
-    this.playerPos.y = this.currentFlightY + hoverBob + chokeOffset;
+    this.dashCooldowns.update(dt);
+    this.dashCooldownRemaining = this.dashCooldowns.getRemaining('dash');
 
     // 0c. Camera FOV Dynamic Recovery from Dash
     if (Math.abs(this.camera.fov - this.cameraBaseFov) > 0.05) {
@@ -1043,27 +1073,66 @@ export class GameScene {
     camRight.crossVectors(camForward, new THREE.Vector3(0, 1, 0)).normalize();
 
     const moveDir = new THREE.Vector3();
-    const effectiveMaxSpeed = this.isFlying ? this.flightMaxSpeed : this.groundMaxSpeed;
+    const isSpinning = !!this.ironManAbilities?.isSpinningLasersActive;
+    let turnDelta = 0;
 
     if (normalizedMagnitude > 0) {
       moveDir.addScaledVector(camRight, normX);
       moveDir.addScaledVector(camForward, -normY);
       moveDir.normalize();
 
-      const targetSpeed = normalizedMagnitude * effectiveMaxSpeed;
-      this.currentSpeed = THREE.MathUtils.damp(this.currentSpeed, targetSpeed, 28.0, dt);
-
       // If spinning lasers are active, do not let movement direction override playerRotationY so spin continues uninterrupted
-      if (!this.ironManAbilities || !this.ironManAbilities.isSpinningLasersActive) {
-        this.targetRotationY = Math.atan2(-moveDir.x, -moveDir.z);
-        let diff = this.targetRotationY - this.playerRotationY;
+      if (!isSpinning) {
+        const desiredRotation = Math.atan2(-moveDir.x, -moveDir.z);
+        let diff = desiredRotation - this.playerRotationY;
         while (diff < -Math.PI) diff += Math.PI * 2;
         while (diff > Math.PI) diff -= Math.PI * 2;
-        this.playerRotationY += diff * Math.min(1.0, dt * 26.0);
+        turnDelta = diff;
+        this.targetRotationY = desiredRotation;
 
-        // Banking roll when turning into direction
-        this.flightBankRoll = THREE.MathUtils.damp(this.flightBankRoll, THREE.MathUtils.clamp(-diff * 0.55, -0.42, 0.42), 12.0, dt);
+        const turnRate = this.isFlying
+          ? getFlightProfile(this.currentPowerSet).turnResponse
+          : 26.0;
+        this.playerRotationY += diff * Math.min(1.0, dt * turnRate);
       }
+    }
+
+    const flightAbility = this.getActiveFlightAbility();
+    const flightProfile = getFlightProfile(this.currentPowerSet);
+    const ascendInput = (this.keyState['KeyR'] || this.keyState['PageUp'])
+      ? 1
+      : Math.max(0, this.flightVerticalInput);
+    const descendInput = (this.keyState['KeyG'] || this.keyState['PageDown'])
+      ? 1
+      : Math.max(0, -this.flightVerticalInput);
+
+    const flightFrame = flightAbility.update(dt, {
+      magnitude: normalizedMagnitude,
+      ascend: ascendInput,
+      descend: descendInput,
+      turnDelta,
+    });
+
+    this.isFlying = flightFrame.active;
+    this.isFlyingLanding = flightFrame.landing;
+
+    const chokeOffset = (this.currentPowerSet === 'agatha' && this.agathaAbilities)
+      ? this.agathaAbilities.chokeElevationOffset
+      : 0;
+    this.playerPos.y = flightFrame.altitude + chokeOffset;
+
+    const flightSpeedMultiplier = this.flightMaxSpeed / DEFAULT_LIVE_CONFIG.flightMaxSpeed;
+    const effectiveMaxSpeed = (this.isFlying || this.isFlyingLanding)
+      ? Math.max(0.1, flightProfile.maxSpeed * flightSpeedMultiplier)
+      : this.groundMaxSpeed;
+
+    if (this.isFlying || this.isFlyingLanding) {
+      this.currentSpeed = flightFrame.speed;
+      this.flightBankRoll = flightFrame.bankRoll;
+    } else if (normalizedMagnitude > 0) {
+      const targetSpeed = normalizedMagnitude * effectiveMaxSpeed;
+      this.currentSpeed = THREE.MathUtils.damp(this.currentSpeed, targetSpeed, 28.0, dt);
+      this.flightBankRoll = THREE.MathUtils.damp(this.flightBankRoll, 0, 10.0, dt);
     } else {
       this.currentSpeed = THREE.MathUtils.damp(this.currentSpeed, 0, 30.0, dt);
       if (this.currentSpeed < 0.005) {
@@ -1072,25 +1141,16 @@ export class GameScene {
       this.flightBankRoll = THREE.MathUtils.damp(this.flightBankRoll, 0, 10.0, dt);
     }
 
+    this.animController.flightStyle = flightProfile.style;
+
     // 3. Move player position horizontally with solid structure collision check
     if (this.isDashing) {
       this.dashTimer += dt;
       const step = this.dashSpeed * dt;
       const nextPos = this.playerPos.clone().addScaledVector(this.dashDir, step);
       const playerRadius = this.playerCollisionRadius;
-      let collided = false;
 
-      for (const box of this.structureBoxes) {
-        const expanded = box.clone();
-        expanded.min.subScalar(playerRadius);
-        expanded.max.addScalar(playerRadius);
-        if (expanded.containsPoint(nextPos)) {
-          collided = true;
-          break;
-        }
-      }
-
-      if (!collided) {
+      if (!CollisionSystem.isCircleBlocked(nextPos, this.structureBoxes, playerRadius)) {
         this.playerPos.x = nextPos.x;
         this.playerPos.z = nextPos.z;
       }
@@ -1108,19 +1168,8 @@ export class GameScene {
 
       const nextPos = this.playerPos.clone().addScaledVector(facingDir, step);
       const playerRadius = this.playerCollisionRadius;
-      let collided = false;
 
-      for (const box of this.structureBoxes) {
-        const expanded = box.clone();
-        expanded.min.subScalar(playerRadius);
-        expanded.max.addScalar(playerRadius);
-        if (expanded.containsPoint(nextPos)) {
-          collided = true;
-          break;
-        }
-      }
-
-      if (!collided) {
+      if (!CollisionSystem.isCircleBlocked(nextPos, this.structureBoxes, playerRadius)) {
         this.playerPos.x = nextPos.x;
         this.playerPos.z = nextPos.z;
       }
@@ -1129,14 +1178,18 @@ export class GameScene {
     // Interactive Jump Pad bounce detection
     const padHit = this.buildModeManager.checkJumpPads(this.playerPos);
     if (padHit && !this.isDashing) {
-      this.isFlying = true;
-      this.targetFlightY = Math.min(16, this.targetFlightY + padHit.bouncePower * 0.38);
-      this.currentFlightY = Math.min(16, this.currentFlightY + padHit.bouncePower * 0.38);
+      flightAbility.bounce(padHit.bouncePower * 0.38);
+      this.isFlying = this.flightSystem.isActive();
+      this.isFlyingLanding = this.flightSystem.isLanding();
+      this.playerPos.y = Math.max(this.playerPos.y, this.flightSystem.getAltitude());
       audioSystem.playFlightToggle(true);
-      this.projectileSystem.emitImpactParticles(this.playerPos.clone().add(new THREE.Vector3(0, 0.2, 0)), 22, 0x00f0ff);
-      if (this.settings.cameraShake) {
-        this.addCameraShake(0.06);
-      }
+      VFXSystem.playImpact(
+        this.projectileSystem,
+        this.playerPos.clone().add(new THREE.Vector3(0, 0.2, 0)),
+        22,
+        VFX_COLORS.ironman
+      );
+      this.applyShake(0.06);
     }
 
     this.stickman.root.position.copy(this.playerPos);
@@ -1149,31 +1202,15 @@ export class GameScene {
     this.stickman.contactShadow.scale.set(shadowScale, shadowScale, 1.0);
     (this.stickman.contactShadow.material as THREE.MeshBasicMaterial).opacity = shadowOpacity;
 
-    // Repulsor & Thruster Jet Flares (Disabled for Agatha Harkness who uses dark magic aura)
-    if (this.currentPowerSet === 'agatha') {
-      this.stickman.thrusters.leftFoot.setIntensity(0);
-      this.stickman.thrusters.rightFoot.setIntensity(0);
-      this.stickman.thrusters.leftHand.setIntensity(0);
-      this.stickman.thrusters.rightHand.setIntensity(0);
-    } else {
-      const customCol = this.ironManAbilities?.customPowerColor;
-      const thrusterIntensity = this.isDashing
-        ? 2.2
-        : this.isFlying
-        ? 1.0 + (this.currentSpeed / this.flightMaxSpeed) * 0.6
-        : 0;
-
-      this.stickman.thrusters.leftFoot.setIntensity(thrusterIntensity, customCol);
-      this.stickman.thrusters.rightFoot.setIntensity(thrusterIntensity, customCol);
-      this.stickman.thrusters.leftHand.setIntensity(
-        this.isDashing ? 1.5 : this.isFlying ? 0.6 : 0,
-        customCol
-      );
-      this.stickman.thrusters.rightHand.setIntensity(
-        this.isDashing ? 1.5 : this.isFlying ? 0.6 : 0,
-        customCol
-      );
-    }
+    // Character-specific flight VFX (repulsor thrusters or arcane aura)
+    this.flightVfx.update(dt, this.stickman, this.projectileSystem, {
+      style: flightProfile.style,
+      active: flightFrame.active,
+      landing: flightFrame.landing,
+      dashing: this.isDashing,
+      speedRatio: flightFrame.speed / Math.max(0.001, effectiveMaxSpeed),
+      customColor: this.ironManAbilities?.customPowerColor ?? null,
+    });
 
     // Follow lighting
     this.dirLight.position.set(
@@ -1246,14 +1283,10 @@ export class GameScene {
     if (this.isBuildMode) {
       this.updateFreeFlyCamera(dt);
 
-      const cosPitch = Math.cos(this.buildCamPitch);
-      const sinPitch = Math.sin(this.buildCamPitch);
-      const theta = this.buildCamYaw;
-
-      const camOffset = new THREE.Vector3(
-        -Math.sin(theta) * cosPitch * this.buildCamDist,
-        sinPitch * this.buildCamDist,
-        -Math.cos(theta) * cosPitch * this.buildCamDist
+      const camOffset = CameraSystem.buildCameraOffset(
+        this.buildCamYaw,
+        this.buildCamPitch,
+        this.buildCamDist
       );
 
       const targetCamPos = this.buildFocusPoint.clone().add(camOffset);
@@ -1272,13 +1305,7 @@ export class GameScene {
     const shoulderHeightOffset = this.cameraHeightOffset;
     const camDist = this.cameraDistance;
 
-    const cosPitch = Math.cos(this.camPitch);
-    const sinPitch = Math.sin(this.camPitch);
-    const viewDir = new THREE.Vector3(
-      -Math.sin(theta) * cosPitch,
-      sinPitch,
-      -Math.cos(theta) * cosPitch
-    ).normalize();
+    const viewDir = CameraSystem.thirdPersonViewDirection(theta, this.camPitch);
 
     // The shoulder anchor on the character
     const shoulderAnchor = new THREE.Vector3(
@@ -1306,16 +1333,15 @@ export class GameScene {
     this.cameraTarget.z = THREE.MathUtils.damp(this.cameraTarget.z, desiredTarget.z, 12.0, dt);
 
     // Apply Camera Shake (ONLY when enabled, restrained intensity)
-    let shakeOffset = new THREE.Vector3();
-    if (this.settings.cameraShake && this.shakeIntensity > 0.001) {
-      const shake = this.shakeIntensity * this.cameraShakeScale;
-      shakeOffset.set(
-        (Math.random() - 0.5) * shake,
-        (Math.random() - 0.5) * shake,
-        (Math.random() - 0.5) * shake
-      );
-      this.shakeIntensity = THREE.MathUtils.damp(this.shakeIntensity, 0, this.shakeDecay, dt);
-    }
+    const shake = CameraSystem.computeShake(
+      this.shakeIntensity,
+      this.cameraShakeScale,
+      this.shakeDecay,
+      dt,
+      !!this.settings.cameraShake
+    );
+    const shakeOffset = shake.offset;
+    this.shakeIntensity = shake.intensity;
 
     this.camera.position.copy(this.currentCameraPos).add(shakeOffset);
     this.camera.lookAt(this.cameraTarget);
@@ -1337,35 +1363,18 @@ export class GameScene {
       this.currentAimPoint.copy(ray.origin).addScaledVector(ray.direction, 32);
     }
 
-    // Aim Assist target detection
+    // Aim Assist target detection via TargetingSystem
     if (!this.settings.aimAssist) {
       this.activeTarget = null;
       return;
     }
 
-    let bestTarget: TargetDummy | null = null;
-    let minAngle = 0.28; // ~16 degrees tight angular tolerance to prevent pulling toward distant invalid targets
-    const maxAimDistance = 30; // max distance from player
-
-    for (const dummy of this.dummies) {
-      if (dummy.isDead) continue;
-      const dummyCenter = dummy.getCenter();
-      const distFromPlayer = dummyCenter.distanceTo(this.playerPos);
-
-      if (distFromPlayer > maxAimDistance) continue;
-
-      // Ray direction vs direction to dummy from camera
-      const toDummy = dummyCenter.clone().sub(ray.origin).normalize();
-      const dot = ray.direction.dot(toDummy);
-      const angle = Math.acos(THREE.MathUtils.clamp(dot, -1, 1));
-
-      if (angle < minAngle) {
-        minAngle = angle;
-        bestTarget = dummy;
-      }
-    }
-
-    this.activeTarget = bestTarget;
+    this.activeTarget = TargetingSystem.selectTarget(
+      this.camera,
+      this.dummies,
+      this.playerPos,
+      true
+    );
     if (this.activeTarget) {
       this.currentAimPoint.copy(this.activeTarget.getCenter());
     }
@@ -1461,13 +1470,10 @@ export class GameScene {
       this.buildCamPitch = 0.45;
       this.buildCamDist = 12.0;
 
-      const cosPitch = Math.cos(this.buildCamPitch);
-      const sinPitch = Math.sin(this.buildCamPitch);
-      const theta = this.buildCamYaw;
-      const camOffset = new THREE.Vector3(
-        -Math.sin(theta) * cosPitch * this.buildCamDist,
-        sinPitch * this.buildCamDist,
-        -Math.cos(theta) * cosPitch * this.buildCamDist
+      const camOffset = CameraSystem.buildCameraOffset(
+        this.buildCamYaw,
+        this.buildCamPitch,
+        this.buildCamDist
       );
       this.currentCameraPos.copy(this.buildFocusPoint).add(camOffset);
       this.camera.position.copy(this.currentCameraPos);
@@ -1518,6 +1524,7 @@ export class GameScene {
     this.flightMaxSpeed = cfg.flightMaxSpeed;
     this.dashSpeed = cfg.dashSpeed;
     this.dashCooldownTotal = cfg.dashCooldown;
+    this.dashCooldowns.setDuration('dash', this.dashCooldownTotal);
     this.dashDuration = cfg.dashDuration;
     this.playerCollisionRadius = cfg.playerCollisionRadius;
 
@@ -1654,6 +1661,14 @@ export class GameScene {
       }
     };
 
+    const getCustomColor = () => this.ironManAbilities.customPowerColor;
+    const onExplosion = (pos: THREE.Vector3, radius: number, color?: number) => {
+      this.ironManAbilities.createExplosion(pos, radius, color);
+    };
+    const onSmoke = (pos: THREE.Vector3, size: number, maxAge: number) => {
+      this.ironManAbilities.createSmokeParticle(pos, size, maxAge);
+    };
+
     if (!ModuleClass) {
       if (kind === 'repulsor') this.ironManAbilities.setRepulsorModule(null);
       if (kind === 'micro-missiles') this.ironManAbilities.setMicroMissilesModule(null);
@@ -1662,12 +1677,41 @@ export class GameScene {
     }
 
     if (kind === 'repulsor') {
-      const module = new ModuleClass(this.scene, this.stickman, getAim, onDamage, onShake);
+      const module = new ModuleClass(
+        this.scene,
+        this.stickman,
+        getAim,
+        onDamage,
+        onShake,
+        getCustomColor,
+        onExplosion
+      );
       this.ironManAbilities.setRepulsorModule(module);
+    } else if (kind === 'micro-missiles') {
+      const module = new ModuleClass(
+        this.scene,
+        this.stickman,
+        onDamage,
+        onShake,
+        getCustomColor,
+        onExplosion,
+        onSmoke
+      );
+      this.ironManAbilities.setMicroMissilesModule(module);
     } else {
-      const module = new ModuleClass(this.scene, this.stickman, onDamage, onShake);
-      if (kind === 'micro-missiles') this.ironManAbilities.setMicroMissilesModule(module);
-      if (kind === 'unibeam') this.ironManAbilities.setUnibeamModule(module);
+      const module = new ModuleClass(
+        this.scene,
+        this.stickman,
+        onDamage,
+        onShake,
+        getAim,
+        getCustomColor,
+        onExplosion,
+        (seconds: number) => {
+          this.ironManAbilities.hitStopTimer = Math.max(this.ironManAbilities.hitStopTimer, seconds);
+        }
+      );
+      this.ironManAbilities.setUnibeamModule(module);
     }
   }
 
@@ -1823,10 +1867,8 @@ export class GameScene {
         oldD.id,
         oldD.group.position.clone(),
         (destroyPos: THREE.Vector3) => {
-          this.projectileSystem.emitDestructionParticles(destroyPos);
-          if (this.settings.cameraShake) {
-            this.addCameraShake(0.24);
-          }
+          VFXSystem.playDestruction(this.projectileSystem, destroyPos);
+          this.applyShake(0.24);
         },
         () => this.getValidSpawnPosition()
       );

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Flame, Shield, Zap, Sparkles, Sword, Rocket, Crosshair, Orbit, Wind, Plane } from 'lucide-react';
+import { ChevronDown, ChevronUp, Flame, Shield, Zap, Sparkles, Sword, Rocket, Crosshair, Orbit, Wind, Plane } from 'lucide-react';
 import { audioSystem } from '../game/AudioSystem';
 
 export interface CombatButtonsProps {
@@ -7,6 +7,7 @@ export interface CombatButtonsProps {
   onAbility?: (id: number) => boolean;
   onDash?: () => boolean;
   onToggleFlight?: () => boolean;
+  onFlightVertical?: (direction: number) => void;
   isFlying?: boolean;
   powerSet?: 'classic' | 'ironman' | 'agatha';
   isClashActive?: boolean;
@@ -52,6 +53,7 @@ export const CombatButtons: React.FC<CombatButtonsProps> = ({
   onAbility,
   onDash,
   onToggleFlight,
+  onFlightVertical,
   isFlying = false,
   powerSet = 'ironman',
   isClashActive = false,
@@ -142,6 +144,18 @@ export const CombatButtons: React.FC<CombatButtonsProps> = ({
     }
   }, [onToggleFlight]);
 
+  const handleFlightVerticalStart = useCallback((direction: number) => (e: React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onFlightVertical?.(direction);
+  }, [onFlightVertical]);
+
+  const handleFlightVerticalEnd = useCallback((e: React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onFlightVertical?.(0);
+  }, [onFlightVertical]);
+
   // Arc parameters strictly in upper-left quadrant (↖️ ⬅️ ⬆️) from Attack button
   const ATTACK_CX = 206;
   const ATTACK_CY = 166;
@@ -207,6 +221,74 @@ export const CombatButtons: React.FC<CombatButtonsProps> = ({
             {isFlying ? (powerSet === 'agatha' ? 'LEVITANDO' : 'FLYING') : (powerSet === 'agatha' ? 'VOO ARC.' : 'FLIGHT')}
           </span>
         </div>
+      )}
+
+      {/* Vertical Flight Controls (Ascend / Descend) */}
+      {(powerSet === 'ironman' || powerSet === 'agatha') && isFlying && (
+        <>
+          <div
+            onPointerDown={handleFlightVerticalStart(1)}
+            onPointerUp={handleFlightVerticalEnd}
+            onPointerCancel={handleFlightVerticalEnd}
+            onPointerLeave={handleFlightVerticalEnd}
+            style={{
+              position: 'absolute',
+              left: '6px',
+              top: '86px',
+              width: '42px',
+              height: '42px',
+              borderRadius: '50%',
+              background: powerSet === 'agatha'
+                ? 'radial-gradient(circle at 35% 35%, #4c1d95, #1e0933)'
+                : 'radial-gradient(circle at 35% 35%, #0c4a6e, #082f49)',
+              border: powerSet === 'agatha'
+                ? '1.5px solid rgba(192, 132, 252, 0.7)'
+                : '1.5px solid rgba(56, 189, 248, 0.7)',
+              boxShadow: '0 3px 8px rgba(0,0,0,0.4)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              pointerEvents: 'auto',
+              cursor: 'pointer',
+              touchAction: 'none',
+            }}
+            className="active:scale-90"
+            title="Subir / Ascend (R)"
+          >
+            <ChevronUp size={20} className={powerSet === 'agatha' ? 'text-fuchsia-200' : 'text-sky-200'} />
+          </div>
+          <div
+            onPointerDown={handleFlightVerticalStart(-1)}
+            onPointerUp={handleFlightVerticalEnd}
+            onPointerCancel={handleFlightVerticalEnd}
+            onPointerLeave={handleFlightVerticalEnd}
+            style={{
+              position: 'absolute',
+              left: '6px',
+              top: '144px',
+              width: '42px',
+              height: '42px',
+              borderRadius: '50%',
+              background: powerSet === 'agatha'
+                ? 'radial-gradient(circle at 35% 35%, #4c1d95, #1e0933)'
+                : 'radial-gradient(circle at 35% 35%, #0c4a6e, #082f49)',
+              border: powerSet === 'agatha'
+                ? '1.5px solid rgba(192, 132, 252, 0.7)'
+                : '1.5px solid rgba(56, 189, 248, 0.7)',
+              boxShadow: '0 3px 8px rgba(0,0,0,0.4)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              pointerEvents: 'auto',
+              cursor: 'pointer',
+              touchAction: 'none',
+            }}
+            className="active:scale-90"
+            title="Descer / Descend (G)"
+          >
+            <ChevronDown size={20} className={powerSet === 'agatha' ? 'text-fuchsia-200' : 'text-sky-200'} />
+          </div>
+        </>
       )}
 
       {/* Thruster Dash / Passo das Sombras Button */}

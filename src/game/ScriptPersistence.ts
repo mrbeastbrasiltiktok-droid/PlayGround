@@ -69,6 +69,22 @@ const VERSIONS_STORE = 'versions';
 const MIRROR_KEY = 'stickman_script_engine_v4';
 const LEGACY_PREFIXES = ['script_draft_', 'script_applied_', 'script_source_'];
 
+function recordPreference(a: ScriptRecordData, b: ScriptRecordData): number {
+  if (a.revision !== b.revision) return a.revision - b.revision;
+  return a.updatedAt - b.updatedAt;
+}
+
+function recordsDiffer(a: ScriptRecordData, b: ScriptRecordData): boolean {
+  return (
+    a.draft !== b.draft ||
+    a.saved !== b.saved ||
+    a.applied !== b.applied ||
+    a.running !== b.running ||
+    a.validated !== b.validated ||
+    a.error?.message !== b.error?.message
+  );
+}
+
 function hashSource(code: string): string {
   let hash = 2166136261;
   for (let i = 0; i < code.length; i++) {
@@ -162,9 +178,98 @@ class ScriptPersistence {
   private memoryRecords: Map<string, ScriptRecordData> = new Map();
   private memoryVersions: ScriptVersionData[] = [];
   private mirrorTimer: ReturnType<typeof setTimeout> | null = null;
+  private mirrorHealthy = true;
+  private mirrorError: string | null = null;
+  private dbAvailable = false;
+  private conflicts = new Map<string, string>();
+  private recordListeners = new Set<(ids: string[]) => void>();
 
   constructor() {
     this.loadMirror();
+    if (typeof window !== 'undefined') {
+      window.addEventListener('storage', this.onStorage);
+    }
+  }
+
+  private onStorage = (event: StorageEvent): void => {
+    if (event.key !== MIRROR_KEY || !event.newValue) return;
+    try {
+      const parsed = JSON.parse(event.newValue) as {
+        records?: Partial<ScriptRecordData>[];
+      };
+      if (!Array.isArray(parsed.records)) return;
+      const changed: string[] = [];
+      for (const raw of parsed.records) {
+        if (!raw?.id) continue;
+        const incoming = normalizeRecord(raw, raw.id);
+        const local = this.memoryRecords.get(incoming.id);
+        if (!local) {
+          this.memoryRecords.set(incoming.id, incoming);
+          changed.push(incoming.id);
+          continue;
+        }
+        const preference = recordPreference(incoming, local);
+        if (preference > 0) {
+          this.memoryRecords.set(incoming.id, incoming);
+          changed.push(incoming.id);
+        } else if (preference === 0 && recordsDiffer(incoming, local)) {
+          this.preserveConflict(incoming, local);
+        }
+      }
+      if (changed.length > 0) {
+        for (const listener of this.recordListeners) listener(changed);
+      }
+    } catch {
+      // A malformed message from another tab cannot corrupt this session.
+    }
+  };
+
+  public subscribeRecordChanges(listener: (ids: string[]) => void): () => void {
+    this.recordListeners.add(listener);
+    return () => this.recordListeners.delete(listener);
+  }
+
+  public getRecordConflict(id: string): string | null {
+    return this.conflicts.get(id) || null;
+  }
+
+  public clearRecordConflict(id: string): void {
+    this.conflicts.delete(id);
+  }
+
+  public getStorageHealth(): { healthy: boolean; message: string | null } {
+    const healthy = this.mirrorHealthy || this.dbAvailable;
+    return {
+      healthy,
+      message: healthy
+        ? null
+        : this.mirrorError ||
+          'Não foi possível gravar no armazenamento local nem no IndexedDB. As alterações podem não sobreviver ao recarregamento.',
+    };
+  }
+
+  private preserveConflict(incoming: ScriptRecordData, local: ScriptRecordData): void {
+    const conflictMessage =
+      'Existem duas versões deste script com a mesma revisão (por exemplo, duas abas). A versão local foi preservada e a outra foi guardada no histórico.';
+    this.conflicts.set(local.id, conflictMessage);
+    const loser =
+      local.draft && local.draft !== incoming.draft
+        ? local.draft
+        : incoming.draft && incoming.draft !== local.draft
+          ? incoming.draft
+          : null;
+    if (loser) {
+      const version: ScriptVersionData = {
+        id: `conflict-${local.id}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        scriptId: local.id,
+        timestamp: Date.now(),
+        label: 'Versão em conflito de outra aba (preservada)',
+        code: loser,
+        hash: sourceHash(loser),
+        kind: 'import',
+      };
+      void this.saveVersion(version);
+    }
   }
 
   public getCachedRecord(id: string): ScriptRecordData | undefined {
@@ -204,9 +309,13 @@ class ScriptPersistence {
         }
       }
       this.migrateLegacyLocalStorage();
-    } catch {
+      this.mirrorHealthy = true;
+      this.mirrorError = null;
+    } catch (error) {
       this.memoryRecords.clear();
       this.memoryVersions = [];
+      this.mirrorHealthy = false;
+      this.mirrorError = (error as Error).message;
     }
   }
 
@@ -291,8 +400,12 @@ class ScriptPersistence {
       const records = Array.from(this.memoryRecords.values());
       const versions = this.memoryVersions.slice(0, 300);
       localStorage.setItem(MIRROR_KEY, JSON.stringify({ records, versions }));
-    } catch {
-      // Quota errors are expected for very large histories. IndexedDB remains authoritative.
+      this.mirrorHealthy = true;
+      this.mirrorError = null;
+    } catch (error) {
+      this.mirrorHealthy = false;
+      this.mirrorError = (error as Error).message || 'Falha ao gravar o espelho local.';
+      // Quota errors are expected for large histories. IndexedDB remains authoritative.
     }
   }
 
@@ -316,10 +429,20 @@ class ScriptPersistence {
             store.createIndex('timestamp', 'timestamp', { unique: false });
           }
         };
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => resolve(null);
-        request.onblocked = () => resolve(null);
+        request.onsuccess = () => {
+          this.dbAvailable = true;
+          resolve(request.result);
+        };
+        request.onerror = () => {
+          this.dbAvailable = false;
+          resolve(null);
+        };
+        request.onblocked = () => {
+          this.dbAvailable = false;
+          resolve(null);
+        };
       } catch {
+        this.dbAvailable = false;
         resolve(null);
       }
     });
@@ -348,8 +471,15 @@ class ScriptPersistence {
         if (!raw?.id) continue;
         const incoming = normalizeRecord(raw, raw.id);
         const local = this.memoryRecords.get(incoming.id);
-        if (!local || incoming.revision >= local.revision || incoming.updatedAt > local.updatedAt) {
+        if (!local) {
           this.memoryRecords.set(incoming.id, incoming);
+          continue;
+        }
+        const preference = recordPreference(incoming, local);
+        if (preference > 0) {
+          this.memoryRecords.set(incoming.id, incoming);
+        } else if (preference === 0 && recordsDiffer(incoming, local)) {
+          this.preserveConflict(incoming, local);
         }
       }
 
@@ -383,6 +513,7 @@ class ScriptPersistence {
         tx.objectStore(SCRIPTS_STORE).put(normalized);
         await transactionDone(tx);
       } catch {
+        this.dbAvailable = false;
         // Keep the synchronous mirror as fallback.
       }
     });

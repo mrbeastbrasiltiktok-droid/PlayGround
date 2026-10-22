@@ -140,6 +140,11 @@ const REQUIRED_FILES = [
   '.env.example',
 ];
 
+const GENERATED_ARTIFACT_PATHS = new Set([
+  'src/game/generated/BuildScriptOverrides.ts',
+  'src/game/generated/BuildModeDefaults.ts',
+]);
+
 const EXCLUDED = [
   'node_modules/ (dependências instaladas)',
   'dist/ (saída de build)',
@@ -267,12 +272,13 @@ código-fonte carregado naquele momento, incluindo as alterações do Build Scri
 
 ### Build Script
 
-- Os arquivos em \`src/game\` e \`src/components\` contêm a versão escolhida pelo
-  exportador: em execução > aplicada > salva > rascunho > original. Versões
-  salvas que ainda não foram aplicadas são exportadas como fonte para que a
-  alteração não seja perdida; o manifesto marca \`notApplied: true\`.
-- Rascunhos e versões aplicadas que não são a principal são preservados em
-  \`build-script/pending/\` e listados em \`build-script/export-manifest.json\`.
+- Os arquivos em \`src/game\` e \`src/components\` contêm a versão executável
+  escolhida pelo exportador: em execução > aplicada > fonte oficial mais
+  recente (disco em desenvolvimento, snapshot do build em produção). Rascunhos
+  e versões salvas nunca são promovidos automaticamente a código executável.
+- Versões salvas, rascunhos e aplicadas que não são a principal são preservados
+  em \`build-script/pending/\` e listados em
+  \`build-script/export-manifest.json\`.
 - O original de qualquer script personalizado é preservado em
   \`build-script/catalog/original/\`, mesmo quando a versão principal é outra.
 - Tudo em \`build-script/\` é histórico: essas cópias são excluídas do
@@ -292,6 +298,8 @@ código-fonte carregado naquele momento, incluindo as alterações do Build Scri
 
 - Alterações externas feitas por IA/dev em arquivos do projeto entram no jogo
   no próximo carregamento ou build. Em desenvolvimento, recarregue a página.
+  Se você exportar antes de recarregar, o ZIP usa o arquivo oficial em disco e
+  registra a divergência entre disco e sessão naquele script.
 - Se já existir uma versão personalizada em execução/aplicada/salva/rascunho,
   ela permanece como principal para reproduzir o comportamento real. A nova
   versão original do catálogo é guardada em \`build-script/catalog/original/\`
@@ -581,6 +589,12 @@ export async function exportProjectZip(options: ProjectExportOptions = {}): Prom
   const exportedScripts: Array<{ id: string; source: string }> = [];
   let scriptIndex = 0;
   const scripts = scriptRuntimeEngine.getScripts();
+  const liveTextByPath = new Map<string, string>();
+  for (const file of discoveredFiles) {
+    if (file.encoding !== 'utf8') continue;
+    const safe = normalizePath(file.path);
+    if (safe) liveTextByPath.set(safe, file.content);
+  }
 
   for (const script of scripts) {
     const state = scriptRuntimeEngine.getScriptState(script.id);
@@ -590,7 +604,24 @@ export async function exportProjectZip(options: ProjectExportOptions = {}): Prom
       divergences.push(message);
       scriptDivergences.push(message);
     };
-    let source = state.originalSource;
+
+    const safePath = normalizePath(script.filePath);
+    if (!safePath) {
+      warnings.push(`${script.name}: caminho de arquivo inválido (${script.filePath}).`);
+      continue;
+    }
+
+    if (GENERATED_ARTIFACT_PATHS.has(safePath)) {
+      continue;
+    }
+
+    // In development the file on disk is the latest official source. The raw
+    // import in RealProjectScripts is only a snapshot taken when the page
+    // loaded, so using it here could silently export an older baseline.
+    const diskSource = liveTextByPath.get(safePath);
+    const officialSource = diskSource ?? state.originalSource;
+    const officialSourceKind: 'disk' | 'bundle' = diskSource !== undefined ? 'disk' : 'bundle';
+    let source = officialSource;
     let sourceKind: ScriptVersionKind = 'original';
 
     if (state.runningSource !== null) {
@@ -614,18 +645,18 @@ export async function exportProjectZip(options: ProjectExportOptions = {}): Prom
       );
     }
 
-    const safePath = normalizePath(script.filePath);
-    if (!safePath) {
-      warnings.push(`${script.name}: caminho de arquivo inválido (${script.filePath}).`);
-      continue;
+    if (sourceKind === 'original' && diskSource !== undefined && diskSource !== state.originalSource) {
+      noteDivergence(
+        `${script.name}: o arquivo em disco foi atualizado depois do carregamento da página; o ZIP exporta o arquivo oficial em disco. Recarregue o jogo para executar exatamente essa versão.`
+      );
     }
 
     const originalVersion = scriptRuntimeEngine
       .getBackups(script.id)
       .find((version) => version.kind === 'original');
     const catalogChangedSinceCustomization =
-      !!originalVersion && originalVersion.code !== state.originalSource;
-    if (catalogChangedSinceCustomization && state.originalSource !== source) {
+      !!originalVersion && originalVersion.code !== officialSource;
+    if (catalogChangedSinceCustomization && officialSource !== source) {
       noteDivergence(
         `${script.name}: o arquivo original do catálogo mudou depois da versão ${sourceKind}; a versão ${sourceKind} permanece como principal e a nova versão original foi preservada em build-script/catalog/original/.`
       );
@@ -636,7 +667,7 @@ export async function exportProjectZip(options: ProjectExportOptions = {}): Prom
       text: string | null;
       present: boolean;
     }> = [
-      { key: 'original', text: state.originalSource, present: true },
+      { key: 'original', text: officialSource, present: true },
       { key: 'draft', text: state.draftSource, present: state.hasDraftChanges },
       { key: 'saved', text: state.savedSource, present: state.savedSource !== null },
       { key: 'validated', text: state.validatedSource, present: state.validatedSource !== null },
@@ -657,10 +688,10 @@ export async function exportProjectZip(options: ProjectExportOptions = {}): Prom
     ) as unknown as ScriptStatesManifest;
 
     let catalogOriginalArchived: string | undefined;
-    if (sourceKind !== 'original' && state.originalSource !== source) {
+    if (sourceKind !== 'original' && officialSource !== source) {
       catalogOriginalArchived = `build-script/catalog/original/${safePath}`;
       if (
-        addText(catalogOriginalArchived, state.originalSource, {
+        addText(catalogOriginalArchived, officialSource, {
           source: 'catalog-archive',
           version: 'original',
           scriptId: script.id,
@@ -756,6 +787,9 @@ export async function exportProjectZip(options: ProjectExportOptions = {}): Prom
       lifecycle: state.lifecycle,
       exportedSource: sourceKind,
       exportedHash: await hashText(source),
+      officialSource: officialSourceKind,
+      officialHash: await hashText(officialSource),
+      sessionOriginalHash: await hashText(state.originalSource),
       hasRunningSource: state.runningSource !== null,
       hasAppliedSource: state.appliedSource !== null,
       hasSavedSource: state.savedSource !== null,

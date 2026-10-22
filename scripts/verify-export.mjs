@@ -211,6 +211,9 @@ for (const file of manifest.files || []) {
   }
 }
 
+const manifestFileByPath = new Map((manifest.files || []).map((file) => [file.path, file]));
+let officialSourcesChecked = 0;
+
 for (const script of manifest.scripts || []) {
   const data = archive[script.filePath];
   if (!data) fail(`script principal ausente: ${script.filePath}`);
@@ -221,16 +224,63 @@ for (const script of manifest.scripts || []) {
   if (script.exportedSource === 'saved' || script.exportedSource === 'draft') {
     fail(`estado não executável promovido a principal: ${script.filePath}`);
   }
+  if (!Number.isFinite(script.revision)) {
+    fail(`revisão ausente no manifesto do script: ${script.filePath}`);
+  }
+  const fileEntry = manifestFileByPath.get(script.filePath);
+  if (!fileEntry || fileEntry.source !== 'script' || fileEntry.scriptId !== script.id) {
+    fail(`entrada de arquivo do script inconsistente: ${script.filePath}`);
+  }
   if (!script.states?.exported?.present) {
     fail(`estado exported ausente no manifesto: ${script.filePath}`);
   } else if (!matchesHash(Buffer.from(data), script.states.exported.hash)) {
     fail(`hash exported divergente: ${script.filePath}`);
+  } else if (script.states.exported.hash.value !== script.exportedHash?.value) {
+    fail(`hash exported difere do hash principal: ${script.filePath}`);
+  }
+
+  const stateKey = script.exportedSource;
+  if (stateKey === 'running' || stateKey === 'applied' || stateKey === 'original') {
+    const state = script.states?.[stateKey];
+    if (!state?.present) {
+      fail(`estado ${stateKey} ausente para o script principal: ${script.filePath}`);
+    } else if (!matchesHash(Buffer.from(data), state.hash)) {
+      fail(`estado ${stateKey} não corresponde ao arquivo principal: ${script.filePath}`);
+    }
+  }
+
+  if (script.officialSource === 'disk') {
+    const diskPath = path.join(ROOT, script.filePath);
+    if (!fs.existsSync(diskPath)) {
+      fail(`fonte oficial em disco ausente: ${script.filePath}`);
+    } else {
+      const diskBytes = fs.readFileSync(diskPath);
+      if (!script.officialHash || !matchesHash(diskBytes, script.officialHash)) {
+        fail(`hash da fonte oficial em disco divergente: ${script.filePath}`);
+      } else {
+        officialSourcesChecked += 1;
+      }
+      if (script.exportedSource === 'original' && !diskBytes.equals(Buffer.from(data))) {
+        fail(`script principal original não corresponde ao arquivo oficial em disco: ${script.filePath}`);
+      }
+    }
+  } else if (script.officialSource !== 'bundle') {
+    fail(`officialSource inválido para ${script.filePath}: ${script.officialSource}`);
   }
 }
 
 for (const pending of manifest.pendingScripts || []) {
-  if (!archive[pending.archivedPath]) fail(`versão pendente ausente: ${pending.archivedPath}`);
+  const pendingData = archive[pending.archivedPath];
+  if (!pendingData) fail(`versão pendente ausente: ${pending.archivedPath}`);
+  const pendingEntry = manifestFileByPath.get(pending.archivedPath);
+  if (!pendingEntry || pendingEntry.pending !== true) {
+    fail(`versão pendente sem marcação pending no manifesto: ${pending.archivedPath}`);
+  }
+  if (!pendingEntry || pendingEntry.scriptId !== pending.id) {
+    fail(`versão pendente com scriptId divergente: ${pending.archivedPath}`);
+  }
 }
+
 for (const catalog of manifest.catalogArchives || []) {
   if (!archive[catalog.archivedPath]) fail(`original arquivado ausente: ${catalog.archivedPath}`);
 }
@@ -251,6 +301,7 @@ const summary = {
   scripts: manifest.scripts?.length || 0,
   pendingVersions: manifest.pendingScripts?.length || 0,
   catalogArchives: manifest.catalogArchives?.length || 0,
+  officialSourcesChecked,
   divergences: manifest.divergences?.length || 0,
   warnings,
 };

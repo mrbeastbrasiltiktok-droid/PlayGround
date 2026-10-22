@@ -20,6 +20,7 @@ import {
   persistAppliedScript,
   removeAppliedScript,
   subscribeAppliedChanges,
+  getAppliedServerEntry,
   AppliedScriptRecord,
 } from './AppliedScriptStore';
 import { liveConfigManager } from './LiveConfigManager';
@@ -56,6 +57,30 @@ import {
 import { IronManRepulsor } from './abilities/ironman/IronManRepulsor';
 import { IronManMicroMissiles } from './abilities/ironman/IronManMicroMissiles';
 import { IronManUnibeam } from './abilities/ironman/IronManUnibeam';
+import { IronManDualBeam } from './abilities/ironman/IronManDualBeam';
+import { IronManBeamClash } from './abilities/ironman/IronManBeamClash';
+import { IronManSpinningLasers } from './abilities/ironman/IronManSpinningLasers';
+import { IronManFlight } from './abilities/ironman/IronManFlight';
+import { AgathaFlight } from './abilities/agatha/AgathaFlight';
+import {
+  activeFlightConfig,
+  updateFlightConfig,
+  resetFlightConfig,
+  mergeFlightConfig,
+  getFlightProfile,
+  DEFAULT_FLIGHT_CONFIG,
+} from './systems/flight/CharacterFlightConfig';
+import { FlightSystem } from './systems/flight/FlightSystem';
+import { CharacterFlightAbility } from './systems/flight/CharacterFlightAbility';
+import { CharacterFlightAnimation } from './systems/flight/CharacterFlightAnimation';
+import { CharacterFlightVFX } from './systems/flight/CharacterFlightVFX';
+import { DamageSystem } from './systems/DamageSystem';
+import { HealthSystem } from './systems/HealthSystem';
+import { CollisionSystem } from './systems/CollisionSystem';
+import { TargetingSystem } from './systems/TargetingSystem';
+import { CameraSystem } from './systems/CameraSystem';
+import { CooldownSystem } from './systems/CooldownSystem';
+import { VFXSystem, VFX_COLORS } from './systems/VFXSystem';
 
 import { CombatButtons } from '../components/CombatButtons';
 import { VirtualJoystick } from '../components/VirtualJoystick';
@@ -134,6 +159,8 @@ export interface ScriptLifecycleState {
   runningHash: string | null;
   exportedHash: string | null;
   exportedAt: number | null;
+  draftConflict: string | null;
+  appliedSyncConflict: string | null;
   error: ScriptRecordData['error'];
   revision: number;
   updatedAt: number;
@@ -151,7 +178,7 @@ interface ApplyOptions {
 const CUSTOM_SCRIPTS_KEY = 'stickman_custom_user_scripts_v4';
 const DELETED_SCRIPTS_KEY = 'stickman_deleted_scripts_v4';
 
-const EXTERNAL_MODULES = new Set(['three', 'react', 'lucide-react', 'sucrase']);
+const EXTERNAL_MODULES = new Set(['three', 'react', 'lucide-react', 'sucrase', 'fflate']);
 
 /**
  * Runtime facades that are intentionally not editable catalog files but are
@@ -164,11 +191,21 @@ const RUNTIME_FACADE_MODULES = new Set([
   'liveconfigmanager',
   'buildmodemanager',
   'scriptruntimeengine',
+  'realprojectscripts',
+  'virtualprojectfiles',
+  'virtualappliedscripts',
 ]);
 
 const EXPECTED_EXPORTS: Record<string, string[]> = {
   'agatha-config': ['activeAgathaConfig', 'default'],
   'ironman-config': ['activeIronManConfig', 'default'],
+  'flight-config': ['activeFlightConfig', 'default'],
+  'flight-system': ['FlightSystem'],
+  'flight-ability': ['CharacterFlightAbility'],
+  'flight-animation': ['CharacterFlightAnimation'],
+  'flight-vfx': ['CharacterFlightVFX'],
+  'ironman-flight': ['IronManFlight'],
+  'agatha-flight': ['AgathaFlight'],
   'agatha-arcane-blast': ['AgathaArcaneBlast', 'default'],
   'agatha-dark-drain': ['AgathaDarkDrain', 'default'],
   'agatha-chaos-orb': ['AgathaChaosOrb', 'default'],
@@ -179,6 +216,9 @@ const EXPECTED_EXPORTS: Record<string, string[]> = {
   'ironman-repulsor': ['IronManRepulsor', 'default'],
   'ironman-micro-missiles': ['IronManMicroMissiles', 'default'],
   'ironman-unibeam': ['IronManUnibeam', 'default'],
+  'ironman-dual-beam': ['IronManDualBeam'],
+  'ironman-beam-clash': ['IronManBeamClash'],
+  'ironman-spinning-lasers': ['IronManSpinningLasers'],
   'ironman-abilities': ['IronManAbilities', 'default'],
   'animation-controller': ['AnimationController', 'default'],
   'projectile-system': ['ProjectileSystem', 'default'],
@@ -194,16 +234,25 @@ const EXPECTED_EXPORTS: Record<string, string[]> = {
   'game-scene': ['GameScene', 'default'],
   'stickman-rig': ['createStickmanRig', 'default'],
   'audio-system': ['audioSystem', 'default'],
+  'damage-system': ['DamageSystem'],
+  'health-system': ['HealthSystem'],
+  'collision-system': ['CollisionSystem'],
+  'targeting-system': ['TargetingSystem'],
+  'camera-system': ['CameraSystem'],
+  'cooldown-system': ['CooldownSystem'],
+  'vfx-system': ['VFXSystem'],
 };
 
 const APPLY_ORDER: Record<string, number> = {
   Configurações: 0,
+  Voo: 1,
   Controladores: 1,
   Habilidades: 2,
   Restrições: 3,
   Combate: 4,
   'Interface & HUD': 5,
   Sistemas: 6,
+  'Editor & Ferramentas': 7,
 };
 
 const normalizeKey = (key: string): string => key.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -236,6 +285,7 @@ class ScriptRuntimeEngine {
 
   private uiComponentRegistry: Map<string, React.ComponentType<any>> = new Map();
   private compiledModules: Map<string, Record<string, unknown>> = new Map();
+  private moduleDependencies: Map<string, Set<string>> = new Map();
   private aliasToScriptId: Map<string, string> = new Map();
   private rehydratedScenes: WeakSet<object> = new WeakSet();
   private operationQueues: Map<string, Promise<unknown>> = new Map();
@@ -249,7 +299,9 @@ class ScriptRuntimeEngine {
   private isReady = false;
   private appliedSyncConflicts: Map<string, string> = new Map();
   private appliedSyncStarted = false;
-  private lastAppliedStoreSource: 'server' | 'bundle' = 'bundle';
+  private recordSyncStarted = false;
+  private appliedReconciled = false;
+  private lastAppliedStoreSource: 'server' | 'bundle' | 'browser' = 'bundle';
 
   public onPowerSetRequested?: (powerSet: 'classic' | 'ironman' | 'agatha') => void;
 
@@ -266,10 +318,18 @@ class ScriptRuntimeEngine {
       const hydrated = normalizeRecord(cached, cached.id);
       const current = this.records.get(cached.id);
       // Never let a slower IndexedDB read overwrite an edit made while the
-      // engine was still hydrating (the mirror is synchronous).
-      if (current && current.revision > hydrated.revision) continue;
+      // engine was still hydrating (the mirror is synchronous). Revision is
+      // primary; timestamp breaks the tie for two tabs at the same revision.
+      if (
+        current &&
+        (current.revision > hydrated.revision ||
+          (current.revision === hydrated.revision && current.updatedAt >= hydrated.updatedAt))
+      ) {
+        continue;
+      }
       this.records.set(cached.id, hydrated);
     }
+    this.startRecordSync();
     await this.mergeAppliedScriptsFromStore();
     for (const script of this.getScripts()) {
       this.ensureRecord(script);
@@ -320,25 +380,23 @@ class ScriptRuntimeEngine {
     const record = this.ensureRecord(script);
     const previousApplied = record.applied;
     const localAppliedAt = record.appliedAt || 0;
-    if (record.applied && entry.appliedAt < localAppliedAt) return false;
-    if (
-      record.applied &&
-      record.applied !== entry.code &&
-      entry.appliedAt === localAppliedAt &&
-      entry.updatedAt <= record.updatedAt
-    ) {
-      this.appliedSyncConflicts.set(
-        entry.id,
-        'Outra aba possui uma versão aplicada com o mesmo instante; a versão local foi preservada.'
-      );
-      return false;
+    const hash = sourceHash(entry.code);
+    const serverAppliedAt = entry.appliedAt || 0;
+    if (record.applied && serverAppliedAt < localAppliedAt) return false;
+    if (record.applied && record.applied !== entry.code && serverAppliedAt === localAppliedAt) {
+      if (entry.updatedAt <= record.updatedAt) {
+        this.appliedSyncConflicts.set(
+          entry.id,
+          'Outra aba possui uma versão aplicada com o mesmo instante; a versão local foi preservada.'
+        );
+        return false;
+      }
     }
-    if (record.applied === entry.code && record.appliedHash === entry.hash) return false;
+    if (record.applied === entry.code && record.appliedHash === hash) return false;
 
-    const hash = entry.hash || sourceHash(entry.code);
     record.applied = entry.code;
     record.appliedHash = hash;
-    record.appliedAt = entry.appliedAt || Date.now();
+    record.appliedAt = serverAppliedAt || Date.now();
     if (!record.draft || record.draft === previousApplied) record.draft = entry.code;
     if (!record.saved || record.saved === previousApplied) record.saved = entry.code;
     if (!record.validated || record.validated === previousApplied) {
@@ -350,8 +408,8 @@ class ScriptRuntimeEngine {
       record.lastWorking = entry.code;
       record.lastWorkingHash = hash;
     }
-    record.revision += 1;
-    record.updatedAt = Date.now();
+    record.revision = Math.max(record.revision + 1, Number(entry.revision) || 0);
+    record.updatedAt = Math.max(Date.now(), Number(entry.updatedAt) || 0);
     record.error = null;
     this.persistRecord(record);
     return true;
@@ -362,9 +420,78 @@ class ScriptRuntimeEngine {
       const { state, source } = await loadAppliedScripts();
       this.lastAppliedStoreSource = source;
       for (const entry of state.scripts) this.mergeAppliedEntry(entry);
+      await this.reconcileNewerAppliedWithServer();
     } catch (error) {
       console.warn('[ScriptRuntimeEngine] Could not load applied-script state:', error);
     }
+  }
+
+  /**
+   * If this browser has a newer explicitly applied version than the server
+   * file (for example because the previous save was offline), push it back
+   * once. The endpoint still rejects the write with 409 if another tab changed
+   * the record in the meantime, so this cannot silently overwrite newer work.
+   */
+  private async reconcileNewerAppliedWithServer(): Promise<void> {
+    if (this.appliedReconciled || this.lastAppliedStoreSource !== 'server') return;
+    this.appliedReconciled = true;
+    for (const script of this.getScripts()) {
+      const record = this.getRecord(script.id);
+      if (!record.applied) continue;
+      const localHash = sourceHash(record.applied);
+      const serverEntry = getAppliedServerEntry(script.id);
+      if (serverEntry && serverEntry.hash === localHash) continue;
+      if (
+        serverEntry &&
+        ((serverEntry.appliedAt || 0) > (record.appliedAt || 0) ||
+          ((serverEntry.appliedAt || 0) === (record.appliedAt || 0) &&
+            (serverEntry.updatedAt || 0) >= record.updatedAt))
+      ) {
+        continue;
+      }
+      const result = await persistAppliedScript({
+        id: script.id,
+        name: script.name,
+        filePath: script.filePath,
+        code: record.applied,
+        hash: localHash,
+        appliedAt: record.appliedAt || Date.now(),
+        revision: record.revision,
+        requiresRestart: getCapability(script) === 'restart-required',
+        updatedAt: record.updatedAt,
+        script: script.isUserCreated ? { ...script } : undefined,
+      });
+      if (result.conflict) {
+        this.appliedSyncConflicts.set(
+          script.id,
+          result.message || 'Outra aba aplicou uma versão diferente; a versão local foi preservada.'
+        );
+      }
+    }
+  }
+
+  private startRecordSync(): void {
+    if (this.recordSyncStarted) return;
+    this.recordSyncStarted = true;
+    // Drafts are stored in the shared mirror. A second tab can recover them
+    // immediately without a reload, while never replacing a newer local edit.
+    scriptPersistence.subscribeRecordChanges((ids) => {
+      let changed = false;
+      for (const id of ids) {
+        const cached = scriptPersistence.getCachedRecord(id);
+        if (!cached) continue;
+        const current = this.records.get(id);
+        if (
+          !current ||
+          cached.revision > current.revision ||
+          (cached.revision === current.revision && cached.updatedAt > current.updatedAt)
+        ) {
+          this.records.set(id, normalizeRecord(cached, id));
+          changed = true;
+        }
+      }
+      if (changed) this.notify();
+    });
   }
 
   private startAppliedSync(): void {
@@ -439,8 +566,12 @@ class ScriptRuntimeEngine {
     }
   }
 
-  public getAppliedStoreSource(): 'server' | 'bundle' {
+  public getAppliedStoreSource(): 'server' | 'bundle' | 'browser' {
     return this.lastAppliedStoreSource;
+  }
+
+  public getStorageHealth(): { healthy: boolean; message: string | null } {
+    return scriptPersistence.getStorageHealth();
   }
 
   public getAppliedSyncConflict(id: string): string | null {
@@ -583,6 +714,7 @@ class ScriptRuntimeEngine {
     record.draft = code;
     record.revision += 1;
     record.updatedAt = Date.now();
+    scriptPersistence.clearRecordConflict(id);
     this.persistRecord(record);
     try {
       localStorage.setItem(`script_draft_${id}`, code);
@@ -604,6 +736,7 @@ class ScriptRuntimeEngine {
     record.saved = code;
     record.revision += 1;
     record.updatedAt = Date.now();
+    scriptPersistence.clearRecordConflict(id);
     this.persistRecord(record);
     if (changed) {
       this.addVersion(
@@ -619,6 +752,15 @@ class ScriptRuntimeEngine {
       // Mirror only.
     }
     this.notify();
+    scriptPersistence.flushMirror();
+    const health = scriptPersistence.getStorageHealth();
+    if (!health.healthy) {
+      return {
+        success: false,
+        message: `Rascunho mantido apenas nesta sessão: ${health.message}`,
+        applied: false,
+      };
+    }
     return {
       success: true,
       message: 'Rascunho salvo. Ele ainda não está em execução; use Aplicar no Jogo.',
@@ -718,6 +860,8 @@ class ScriptRuntimeEngine {
       runningHash: running ? record.runningHash : null,
       exportedHash: record.exportedHash,
       exportedAt: record.exportedAt,
+      draftConflict: scriptPersistence.getRecordConflict(id),
+      appliedSyncConflict: this.appliedSyncConflicts.get(id) || null,
       error: record.error,
       revision: record.revision,
       updatedAt: record.updatedAt,
@@ -807,9 +951,13 @@ class ScriptRuntimeEngine {
     if (this.rehydratedScenes.has(scene)) return;
     this.rehydratedScenes.add(scene);
 
-    const scripts = this.getScripts()
+    const candidates = this.getScripts()
       .filter((s) => getCapability(s) === 'hot-swap')
-      .sort((a, b) => (APPLY_ORDER[a.category] ?? 99) - (APPLY_ORDER[b.category] ?? 99));
+      .filter((s) => !!this.getRecord(s.id).applied);
+    const scripts = this.orderScriptsByDependencies(
+      candidates,
+      (script) => this.getRecord(script.id).applied || script.originalSource
+    );
 
     for (const script of scripts) {
       const record = this.getRecord(script.id);
@@ -818,6 +966,7 @@ class ScriptRuntimeEngine {
 
       const result = await this.applyScript(script.id, applied, scene, {
         startup: true,
+        skipDependents: true,
         skipServerSync: true,
         versionKind: 'applied',
         versionLabel: `Reaplicado na inicialização (${new Date().toLocaleTimeString('pt-BR')})`,
@@ -900,6 +1049,7 @@ class ScriptRuntimeEngine {
       const record = this.getRecord(id);
       const hash = sourceHash(code);
       const changed = record.applied !== code;
+      scriptPersistence.clearRecordConflict(id);
       record.draft = code;
       record.saved = code;
       record.validated = code;
@@ -929,16 +1079,18 @@ class ScriptRuntimeEngine {
         );
       }
       const sync = await this.persistAppliedVersion(script, record, code);
+      const syncWarning = sync.conflict || !sync.ok ? sync.message : undefined;
       this.notify();
       return {
         success: true,
-        message:
-          'Versão validada e aplicada para o próximo build/reinício. Ela ainda não está em execução nesta sessão.',
+        message: `Versão validada e aplicada para o próximo build/reinício. Ela ainda não está em execução nesta sessão.${
+          syncWarning ? ` Atenção: ${syncWarning}` : ''
+        }`,
         applied: true,
         running: false,
         validated: true,
         requiresRestart: true,
-        syncWarning: sync.conflict ? sync.message : undefined,
+        syncWarning,
         capability,
       };
     });
@@ -1059,6 +1211,7 @@ class ScriptRuntimeEngine {
       this.compiledModules.set(id, compiled.moduleExports);
       const record = this.getRecord(id);
       const hash = sourceHash(code);
+      scriptPersistence.clearRecordConflict(id);
       record.draft = code;
       record.saved = code;
       record.validated = code;
@@ -1103,15 +1256,16 @@ class ScriptRuntimeEngine {
         // The note is part of the result, not a substitute for the applied flag.
       }
 
+      const syncWarning = sync.conflict || !sync.ok ? sync.message : undefined;
       return {
         success: true,
         message: `Compilado, integrado e em execução. ${integration.note}${
-          sync.conflict ? ` Atenção: ${sync.message}` : ''
+          syncWarning ? ` Atenção: ${syncWarning}` : ''
         }`.trim(),
         applied: true,
         running: true,
         validated: true,
-        syncWarning: sync.conflict ? sync.message : undefined,
+        syncWarning,
         capability,
         diagnostics: [],
       };
@@ -1173,6 +1327,7 @@ class ScriptRuntimeEngine {
         diagnostic: { ...dependencyError, file: this.getScriptById(id)?.filePath },
       };
     }
+    this.moduleDependencies.set(id, this.dependencyIdsFrom(compiledJs));
 
     if (!execute) {
       const available = moduleExportNames(compiledJs);
@@ -1247,6 +1402,83 @@ class ScriptRuntimeEngine {
     }
   }
 
+  /**
+   * Extracts internal module ids referenced by a module. Both transformed
+   * CommonJS requires and raw ES imports are accepted so startup ordering can
+   * be computed before a module is executed.
+   */
+  private dependencyIdsFrom(text: string): Set<string> {
+    const ids = new Set<string>();
+    const specifiers: string[] = [];
+    const patterns = [
+      /require\(\s*["']([^"']+)["']\s*\)/g,
+      /from\s+["']([^"']+)["']/g,
+      /import\s*\(\s*["']([^"']+)["']\s*\)/g,
+    ];
+    for (const pattern of patterns) {
+      let match: RegExpExecArray | null;
+      while ((match = pattern.exec(text)) !== null) specifiers.push(match[1]);
+    }
+    for (const specifier of specifiers) {
+      if (EXTERNAL_MODULES.has(specifier) || specifier.startsWith('three/')) continue;
+      const base = basenameSpecifier(specifier);
+      if (RUNTIME_FACADE_MODULES.has(base)) {
+        const facadeId = this.aliasToScriptId.get(base);
+        if (facadeId) ids.add(facadeId);
+        continue;
+      }
+      const targetId = this.aliasToScriptId.get(base) || this.aliasToScriptId.get(normalizeKey(specifier));
+      if (targetId) ids.add(targetId);
+    }
+    return ids;
+  }
+
+  /**
+   * Dependencies must run before the modules that import them. Without this,
+   * an applied TargetDummy (Combate) could be installed after an ability
+   * (Habilidades) that already captured the factory class at compile time.
+   */
+  private orderScriptsByDependencies(
+    scripts: ProjectScriptInfo[],
+    sourceFor: (script: ProjectScriptInfo) => string
+  ): ProjectScriptInfo[] {
+    const byId = new Map(scripts.map((script) => [script.id, script]));
+    const dependencies = new Map<string, string[]>();
+    for (const script of scripts) {
+      const ids: string[] = [];
+      for (const id of this.dependencyIdsFrom(sourceFor(script))) {
+        if (id !== script.id && byId.has(id)) ids.push(id);
+      }
+      dependencies.set(script.id, ids);
+    }
+
+    const result: ProjectScriptInfo[] = [];
+    const state = new Map<string, 1 | 2>();
+    const visit = (script: ProjectScriptInfo) => {
+      if (state.get(script.id) === 2 || state.get(script.id) === 1) return;
+      state.set(script.id, 1);
+      const deps = (dependencies.get(script.id) || [])
+        .map((id) => byId.get(id))
+        .filter((dep): dep is ProjectScriptInfo => !!dep)
+        .sort(
+          (a, b) =>
+            (APPLY_ORDER[a.category] ?? 99) - (APPLY_ORDER[b.category] ?? 99) ||
+            a.id.localeCompare(b.id)
+        );
+      for (const dep of deps) visit(dep);
+      state.set(script.id, 2);
+      result.push(script);
+    };
+
+    const ordered = [...scripts].sort(
+      (a, b) =>
+        (APPLY_ORDER[a.category] ?? 99) - (APPLY_ORDER[b.category] ?? 99) ||
+        a.id.localeCompare(b.id)
+    );
+    for (const script of ordered) visit(script);
+    return result;
+  }
+
   private validateDependencies(compiledJs: string): ScriptDiagnostic | null {
     const requirePattern = /require\(["']([^"']+)["']\)/g;
     const seen = new Set<string>();
@@ -1307,6 +1539,22 @@ class ScriptRuntimeEngine {
     return facade;
   }
 
+  private flightConfigFacade(): Record<string, unknown> {
+    const facade: Record<string, unknown> = {
+      default: activeFlightConfig,
+      updateFlightConfig,
+      resetFlightConfig,
+      mergeFlightConfig,
+      getFlightProfile,
+      DEFAULT_FLIGHT_CONFIG,
+    };
+    Object.defineProperty(facade, 'activeFlightConfig', {
+      enumerable: true,
+      get: () => activeFlightConfig,
+    });
+    return facade;
+  }
+
   private resolveDependency(specifier: string): unknown {
     const norm = normalizeKey(specifier);
 
@@ -1325,6 +1573,13 @@ class ScriptRuntimeEngine {
 
     if (targetId === 'agatha-config' || base === 'agathaconfig') return this.agathaConfigFacade();
     if (targetId === 'ironman-config' || base === 'ironmanconfig') return this.ironManConfigFacade();
+    if (
+      targetId === 'flight-config' ||
+      base === 'characterflightconfig' ||
+      base === 'flightconfig'
+    ) {
+      return this.flightConfigFacade();
+    }
 
     if (targetId && this.compiledModules.has(targetId)) {
       return this.compiledModules.get(targetId)!;
@@ -1361,6 +1616,15 @@ class ScriptRuntimeEngine {
       ironmanrepulsor: { IronManRepulsor, default: IronManRepulsor },
       ironmanmicromissiles: { IronManMicroMissiles, default: IronManMicroMissiles },
       ironmanunibeam: { IronManUnibeam, default: IronManUnibeam },
+      ironmandualbeam: { IronManDualBeam, default: IronManDualBeam },
+      ironmanbeamclash: { IronManBeamClash, default: IronManBeamClash },
+      ironmanspinninglasers: { IronManSpinningLasers, default: IronManSpinningLasers },
+      ironmanflight: { IronManFlight, default: IronManFlight },
+      agathaflight: { AgathaFlight, default: AgathaFlight },
+      flightsystem: { FlightSystem, default: FlightSystem },
+      characterflightability: { CharacterFlightAbility, default: CharacterFlightAbility },
+      characterflightanimation: { CharacterFlightAnimation, default: CharacterFlightAnimation },
+      characterflightvfx: { CharacterFlightVFX, default: CharacterFlightVFX },
       ironmanabilities: { IronManAbilities, default: IronManAbilities },
       targetdummy: { TargetDummy, default: TargetDummy },
       stickmanrig: { createStickmanRig, default: createStickmanRig },
@@ -1372,6 +1636,13 @@ class ScriptRuntimeEngine {
       beamclashbanner: { BeamClashBanner, default: BeamClashBanner },
       powerselectmodal: { PowerSelectModal, default: PowerSelectModal },
       settingsmodal: { SettingsModal, default: SettingsModal },
+      damagesystem: { DamageSystem, default: DamageSystem },
+      healthsystem: { HealthSystem, default: HealthSystem },
+      collisionsystem: { CollisionSystem, default: CollisionSystem },
+      targetingsystem: { TargetingSystem, default: TargetingSystem },
+      camerasystem: { CameraSystem, default: CameraSystem },
+      cooldownsystem: { CooldownSystem, default: CooldownSystem },
+      vfxsystem: { VFXSystem, VFX_COLORS, default: VFXSystem },
     };
     if (defaults[base]) return defaults[base];
 
@@ -1401,12 +1672,12 @@ class ScriptRuntimeEngine {
   }
 
   private getAgathaCallbacks(scene: any) {
-    const getAim = () => {
-      if (scene.settings?.aimAssist && scene.activeTarget && !scene.activeTarget.isDead) {
-        return { pos: scene.activeTarget.getCenter(), target: scene.activeTarget };
-      }
-      return { pos: scene.currentAimPoint.clone(), target: null };
-    };
+    const getAim = () =>
+      TargetingSystem.resolveAim(
+        scene.activeTarget ?? null,
+        !!scene.settings?.aimAssist,
+        scene.currentAimPoint
+      );
     const onDamage = (dummy: any, dmg: number, hitPos: any, kb: any) => {
       const res = dummy.takeDamage(dmg, hitPos, kb);
       if (res.actualDamage > 0) scene.triggerHitConfirm?.();
@@ -1452,6 +1723,16 @@ class ScriptRuntimeEngine {
         }
         updateIronManConfig(exportedConfig as any);
         return { note: 'Parâmetros do Homem de Ferro atualizados, persistidos e consumidos pelas armas.' };
+      }
+      case 'flight-config': {
+        const exportedConfig = this.pickObject(moduleExports, ['activeFlightConfig', 'default']);
+        if (!exportedConfig) throw new Error('A configuração de voo não exporta um objeto válido.');
+        const characters = (exportedConfig as { characters?: Record<string, unknown> }).characters;
+        if (!characters || !('ironman' in characters) || !('classic' in characters)) {
+          throw new Error('A configuração de voo não contém os perfis obrigatórios.');
+        }
+        updateFlightConfig(exportedConfig as any);
+        return { note: 'Perfis de voo atualizados, persistidos e aplicados imediatamente.' };
       }
       case 'agatha-arcane-blast': {
         if (!typedScene) throw new Error('Cena do jogo indisponível.');
@@ -1628,7 +1909,33 @@ class ScriptRuntimeEngine {
    * abilities so a controller update does not silently undo them.
    */
   private reapplyDependents(controllerId: string, scene: unknown): void {
-    const dependentIds: Record<string, string[]> = {
+    // Config modules are live facades; consumers read them through the facade
+    // on every access, so they never need to be rebuilt.
+    const facadeIds = new Set([
+      'agatha-config',
+      'ironman-config',
+      'flight-config',
+      'gameplay-restrictions',
+      'audio-system',
+      'settings-manager',
+      'live-config-manager',
+    ]);
+    if (facadeIds.has(controllerId)) return;
+
+    const dependents = new Set<string>();
+    const queue: string[] = [controllerId];
+    while (queue.length > 0) {
+      const dependency = queue.shift()!;
+      for (const [scriptId, deps] of this.moduleDependencies) {
+        if (scriptId === dependency || dependents.has(scriptId) || !deps.has(dependency)) continue;
+        dependents.add(scriptId);
+        queue.push(scriptId);
+      }
+    }
+
+    // Preserve the existing controller behaviour: when a controller itself is
+    // replaced, reinstall its individually edited submodules as well.
+    const controllerDependents: Record<string, string[]> = {
       'agatha-abilities': [
         'agatha-arcane-blast',
         'agatha-dark-drain',
@@ -1639,9 +1946,9 @@ class ScriptRuntimeEngine {
       ],
       'ironman-abilities': ['ironman-repulsor', 'ironman-micro-missiles', 'ironman-unibeam'],
     };
-    const ids = dependentIds[controllerId];
-    if (!ids) return;
-    for (const id of ids) {
+    for (const id of controllerDependents[controllerId] || []) dependents.add(id);
+
+    for (const id of dependents) {
       const record = this.records.get(id);
       const exports = this.compiledModules.get(id);
       if (!record?.applied || !exports) continue;

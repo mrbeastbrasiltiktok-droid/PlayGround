@@ -8,6 +8,7 @@
 import * as THREE from 'three';
 import { audioSystem } from '../../AudioSystem';
 import { activeAgathaConfig } from './AgathaConfig';
+import { CollisionSystem } from '../../systems/CollisionSystem';
 
 export class AgathaShadowStep {
   private scene: THREE.Scene;
@@ -31,28 +32,13 @@ export class AgathaShadowStep {
     const dir = inputDir.lengthSq() > 0.05 ? inputDir.clone().normalize() : new THREE.Vector3(0, 0, -1);
     dir.y = 0;
 
-    let validDist = teleportDistance;
-    const stepSize = 0.4;
-    const steps = Math.ceil(teleportDistance / stepSize);
-
-    for (let s = 1; s <= steps; s++) {
-      const checkDist = Math.min(teleportDistance, s * stepSize);
-      const testPos = currentPos.clone().addScaledVector(dir, checkDist);
-
-      for (const box of structureBoxes) {
-        const expanded = box.clone();
-        expanded.min.subScalar(playerRadius);
-        expanded.max.addScalar(playerRadius);
-
-        if (testPos.y >= expanded.min.y && testPos.y <= expanded.max.y) {
-          if (expanded.containsPoint(testPos)) {
-            validDist = Math.max(0, (s - 1) * stepSize - 0.2);
-            break;
-          }
-        }
-      }
-      if (validDist < teleportDistance) break;
-    }
+    const validDist = CollisionSystem.freeDistance(
+      currentPos,
+      dir,
+      teleportDistance,
+      structureBoxes,
+      playerRadius
+    );
 
     const destPos = currentPos.clone().addScaledVector(dir, validDist);
 

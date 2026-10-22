@@ -1093,6 +1093,25 @@ export const BuildModeContainer: React.FC<BuildModeContainerProps> = ({
                     )}
                   </div>
 
+                  {!scriptRuntimeEngine.getStorageHealth().healthy && (
+                    <div className="p-2 bg-rose-950/40 border border-rose-700/60 rounded text-[10px] text-rose-200 leading-relaxed">
+                      <b>Falha de armazenamento:</b>{' '}
+                      {scriptRuntimeEngine.getStorageHealth().message}
+                    </div>
+                  )}
+
+                  {scriptState?.draftConflict && (
+                    <div className="p-2 bg-amber-950/40 border border-amber-700/60 rounded text-[10px] text-amber-100 leading-relaxed">
+                      <b>Conflito de rascunho:</b> {scriptState.draftConflict}
+                    </div>
+                  )}
+
+                  {scriptState?.appliedSyncConflict && (
+                    <div className="p-2 bg-amber-950/40 border border-amber-700/60 rounded text-[10px] text-amber-100 leading-relaxed">
+                      <b>Conflito de versão aplicada:</b> {scriptState.appliedSyncConflict}
+                    </div>
+                  )}
+
                   <div className="flex items-center gap-1.5 text-[10px]">
                     <span className="text-[#71717a]">Integração:</span>
                     {scriptState?.capability === 'restart-required' ? (
