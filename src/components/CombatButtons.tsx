@@ -1,5 +1,16 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Flame, Shield, Zap, Sparkles, Sword, Rocket, Crosshair, Orbit, Wind, Plane } from 'lucide-react';
+import {
+  Flame,
+  Shield,
+  Zap,
+  Sparkles,
+  Sword,
+  Rocket,
+  Crosshair,
+  Orbit,
+  Wind,
+  Plane,
+} from 'lucide-react';
 import { audioSystem } from '../game/AudioSystem';
 
 export interface CombatButtonsProps {
@@ -8,7 +19,7 @@ export interface CombatButtonsProps {
   onDash?: () => boolean;
   onToggleFlight?: () => boolean;
   isFlying?: boolean;
-  powerSet?: 'classic' | 'ironman' | 'agatha';
+  powerSet: 'classic' | 'ironman' | 'agatha' | 'strange';
   isClashActive?: boolean;
 }
 
@@ -20,13 +31,22 @@ interface AbilityState {
   cooldownRemaining: number;
 }
 
-const getInitialAbilities = (powerSet: 'classic' | 'ironman' | 'agatha'): AbilityState[] => {
+const getInitialAbilities = (powerSet: 'classic' | 'ironman' | 'agatha' | 'strange'): AbilityState[] => {
   if (powerSet === 'agatha') {
     return [
       { id: 1, name: 'Drenagem Sombria', icon: <Zap size={19} className="text-purple-300" />, cooldownTotal: 7.0, cooldownRemaining: 0 },
       { id: 2, name: 'Orbe do Caos', icon: <Orbit size={19} className="text-violet-300" />, cooldownTotal: 5.0, cooldownRemaining: 0 },
       { id: 3, name: 'Barreira Rúnica', icon: <Shield size={19} className="text-fuchsia-300" />, cooldownTotal: 8.0, cooldownRemaining: 0 },
       { id: 4, name: 'Estrangulamento Arcano', icon: <Crosshair size={19} className="text-pink-400" />, cooldownTotal: 9.0, cooldownRemaining: 0 },
+    ];
+  }
+
+  if (powerSet === 'strange') {
+    return [
+      { id: 1, name: 'Feixe Místico', icon: <Zap size={19} className="text-orange-400" />, cooldownTotal: 7.0, cooldownRemaining: 0 },
+      { id: 2, name: 'Escudo Místico', icon: <Shield size={19} className="text-orange-400" />, cooldownTotal: 10.0, cooldownRemaining: 0 },
+      { id: 3, name: 'Explosão Verde', icon: <Crosshair size={19} className="text-green-400" />, cooldownTotal: 12.0, cooldownRemaining: 0 },
+      { id: 4, name: 'Voo Místico', icon: <Plane size={19} className="text-orange-400" />, cooldownTotal: 0, cooldownRemaining: 0 },
     ];
   }
 
@@ -60,11 +80,14 @@ export const CombatButtons: React.FC<CombatButtonsProps> = ({
   const [dashCooldown, setDashCooldown] = useState(0);
   const [isAttackPressed, setIsAttackPressed] = useState(false);
   const [abilities, setAbilities] = useState<AbilityState[]>(() => getInitialAbilities(powerSet));
+  const [beamActive, setBeamActive] = useState(false);
+  const dashCdTotal = powerSet === 'strange' ? 5.0 : 2.2;
 
   // Sync abilities when powerSet changes
   useEffect(() => {
     setAbilities(getInitialAbilities(powerSet));
     setAttackCooldown(0);
+    setBeamActive(false);
   }, [powerSet]);
 
   // Tick cooldowns
@@ -98,7 +121,7 @@ export const CombatButtons: React.FC<CombatButtonsProps> = ({
     setIsAttackPressed(true);
     const launched = onAttack();
     if (launched && !isClashActive) {
-      setAttackCooldown(powerSet === 'agatha' ? 0.22 : powerSet === 'ironman' ? 0.20 : 0.42);
+      setAttackCooldown(powerSet === 'agatha' ? 0.22 : powerSet === 'ironman' ? 0.20 : powerSet === 'strange' ? 0.45 : 0.42);
     }
   }, [attackCooldown, isClashActive, onAttack, powerSet]);
 
@@ -115,14 +138,30 @@ export const CombatButtons: React.FC<CombatButtonsProps> = ({
     const ab = abilities.find((a) => a.id === id);
     if (!ab || ab.cooldownRemaining > 0) return;
 
+    // Strange Mystic Beam is a toggle: tapping while active cancels instantly (no CD re-gate)
+    if (powerSet === 'strange' && id === 1 && beamActive) {
+      audioSystem.playUiClick();
+      const launched = onAbility ? onAbility(id) : true;
+      if (launched) {
+        setBeamActive(false);
+        setAbilities((prev) =>
+          prev.map((a) => (a.id === id ? { ...a, cooldownRemaining: 0 } : a))
+        );
+      }
+      return;
+    }
+
     audioSystem.playUiClick();
     const launched = onAbility ? onAbility(id) : true;
     if (launched) {
+      if (powerSet === 'strange' && id === 1) {
+        setBeamActive(true);
+      }
       setAbilities((prev) =>
         prev.map((a) => (a.id === id ? { ...a, cooldownRemaining: a.cooldownTotal } : a))
       );
     }
-  }, [abilities, onAbility]);
+  }, [abilities, onAbility, powerSet, beamActive]);
 
   const handleDashPress = useCallback((e: React.PointerEvent) => {
     e.preventDefault();
@@ -130,9 +169,9 @@ export const CombatButtons: React.FC<CombatButtonsProps> = ({
     if (dashCooldown > 0) return;
     const launched = onDash ? onDash() : false;
     if (launched) {
-      setDashCooldown(2.2);
+      setDashCooldown(dashCdTotal);
     }
-  }, [dashCooldown, onDash]);
+  }, [dashCooldown, onDash, dashCdTotal]);
 
   const handleFlightPress = useCallback((e: React.PointerEvent) => {
     e.preventDefault();
@@ -148,7 +187,7 @@ export const CombatButtons: React.FC<CombatButtonsProps> = ({
   const ORBIT_RADIUS = 76;
   const angles = [-6, 28, 62, 96];
 
-  const maxAttackCd = powerSet === 'agatha' ? 0.22 : powerSet === 'ironman' ? 0.20 : 0.42;
+  const maxAttackCd = powerSet === 'agatha' ? 0.22 : powerSet === 'ironman' ? 0.20 : powerSet === 'strange' ? 0.45 : 0.42;
 
   return (
     <div
@@ -165,8 +204,8 @@ export const CombatButtons: React.FC<CombatButtonsProps> = ({
         touchAction: 'none',
       }}
     >
-      {/* Flight Mode Toggle Button (Iron Man & Agatha Harkness) */}
-      {(powerSet === 'ironman' || powerSet === 'agatha') && (
+      {/* Flight Mode Toggle Button (Iron Man, Agatha Harkness & Doctor Strange) */}
+      {(powerSet === 'ironman' || powerSet === 'agatha' || powerSet === 'strange') && (
         <div
           onPointerDown={handleFlightPress}
           style={{
@@ -179,16 +218,22 @@ export const CombatButtons: React.FC<CombatButtonsProps> = ({
             background: isFlying
               ? powerSet === 'agatha'
                 ? 'radial-gradient(circle at 35% 35%, #7e22ce, #3b0764)'
+                : powerSet === 'strange'
+                ? 'radial-gradient(circle at 35% 35%, #ea580c, #7c2d12)'
                 : 'radial-gradient(circle at 35% 35%, #0284c7, #075985)'
               : 'radial-gradient(circle at 35% 35%, #232c3d, #111722)',
             border: isFlying
               ? powerSet === 'agatha'
                 ? '2px solid #c084fc'
+                : powerSet === 'strange'
+                ? '2px solid #fb923c'
                 : '2px solid #38bdf8'
               : '1.5px solid rgba(255, 255, 255, 0.22)',
             boxShadow: isFlying
               ? powerSet === 'agatha'
                 ? '0 0 16px rgba(168, 85, 247, 0.75), 0 3px 8px rgba(0,0,0,0.45)'
+                : powerSet === 'strange'
+                ? '0 0 16px rgba(251, 146, 60, 0.75), 0 3px 8px rgba(0,0,0,0.45)'
                 : '0 0 16px rgba(56, 189, 248, 0.75), 0 3px 8px rgba(0,0,0,0.45)'
               : '0 3px 8px rgba(0,0,0,0.4)',
             display: 'flex',
@@ -200,16 +245,18 @@ export const CombatButtons: React.FC<CombatButtonsProps> = ({
             transition: 'all 0.15s ease',
           }}
           className="active:scale-90"
-          title={isFlying ? (powerSet === 'agatha' ? 'Descer (Pousar)' : 'Land') : (powerSet === 'agatha' ? 'Voo Arcano (Levitar)' : 'Flight')}
+          title={isFlying ? (powerSet === 'agatha' ? 'Descer (Pousar)' : 'Land') : (powerSet === 'agatha' ? 'Voo Arcano (Levitar)' : powerSet === 'strange' ? 'Voo Místico (Levitar)' : 'Flight')}
         >
           <Plane size={19} className={isFlying ? (powerSet === 'agatha' ? 'text-fuchsia-200 drop-shadow' : 'text-sky-200 drop-shadow') : 'text-slate-300'} />
-          <span style={{ fontSize: '7.5px', fontWeight: 800, color: isFlying ? (powerSet === 'agatha' ? '#f3e8ff' : '#bae6fd') : '#94a3b8', letterSpacing: '0.04em' }}>
-            {isFlying ? (powerSet === 'agatha' ? 'LEVITANDO' : 'FLYING') : (powerSet === 'agatha' ? 'VOO ARC.' : 'FLIGHT')}
+          <span style={{ fontSize: '7.5px', fontWeight: 800, color: isFlying ? (powerSet === 'agatha' ? '#f3e8ff' : powerSet === 'strange' ? '#ffedd5' : '#bae6fd') : '#94a3b8', letterSpacing: '0.04em' }}>
+            {isFlying
+              ? (powerSet === 'agatha' ? 'LEVITANDO' : powerSet === 'strange' ? 'LEVITANDO' : 'FLYING')
+              : (powerSet === 'agatha' ? 'VOO ARC.' : powerSet === 'strange' ? 'VOO MÍS.' : 'FLIGHT')}
           </span>
         </div>
       )}
 
-      {/* Thruster Dash / Passo das Sombras Button */}
+      {/* Thruster Dash / Passo dos Portais Button */}
       <div
         onPointerDown={handleDashPress}
         style={{
@@ -223,16 +270,22 @@ export const CombatButtons: React.FC<CombatButtonsProps> = ({
             ? 'radial-gradient(circle at 35% 35%, #23272e, #12151a)'
             : powerSet === 'agatha'
             ? 'radial-gradient(circle at 35% 35%, #6b21a8, #2e1065)'
+            : powerSet === 'strange'
+            ? 'radial-gradient(circle at 35% 35%, #c2410c, #7c2d12)'
             : 'radial-gradient(circle at 35% 35%, #d97706, #78350f)',
           border: dashCooldown > 0
             ? '1.5px solid rgba(255, 255, 255, 0.18)'
             : powerSet === 'agatha'
             ? '2px solid rgba(192, 132, 252, 0.9)'
+            : powerSet === 'strange'
+            ? '2px solid rgba(251, 146, 60, 0.9)'
             : '2px solid rgba(251, 191, 36, 0.85)',
           boxShadow: dashCooldown > 0
             ? '0 2px 6px rgba(0,0,0,0.4)'
             : powerSet === 'agatha'
             ? '0 3px 12px rgba(168, 85, 247, 0.5), 0 0 10px rgba(192, 132, 252, 0.4)'
+            : powerSet === 'strange'
+            ? '0 3px 12px rgba(249, 115, 22, 0.5), 0 0 10px rgba(251, 146, 60, 0.4)'
             : '0 3px 12px rgba(245, 158, 11, 0.45), 0 0 8px rgba(251, 191, 36, 0.3)',
           display: 'flex',
           flexDirection: 'column',
@@ -244,7 +297,7 @@ export const CombatButtons: React.FC<CombatButtonsProps> = ({
           transition: 'all 0.12s ease',
         }}
         className="active:scale-90"
-        title={powerSet === 'agatha' ? 'Passo das Sombras (Teleporte)' : 'Thruster Dash / Evade'}
+        title={powerSet === 'agatha' ? 'Passo das Sombras (Teleporte)' : powerSet === 'strange' ? 'Passo do Portal (Dash)' : 'Thruster Dash / Evade'}
       >
         {/* Radial Cooldown */}
         {dashCooldown > 0 && (
@@ -253,22 +306,22 @@ export const CombatButtons: React.FC<CombatButtonsProps> = ({
               position: 'absolute',
               inset: 0,
               borderRadius: '50%',
-              background: `conic-gradient(rgba(0, 0, 0, 0.65) ${(dashCooldown / 2.2) * 100}%, transparent ${(dashCooldown / 2.2) * 100}%)`,
+              background: `conic-gradient(rgba(0, 0, 0, 0.65) ${(dashCooldown / dashCdTotal) * 100}%, transparent ${(dashCooldown / dashCdTotal) * 100}%)`,
               pointerEvents: 'none',
             }}
           />
         )}
-        <Wind size={19} className={dashCooldown > 0 ? 'text-slate-500' : powerSet === 'agatha' ? 'text-purple-200' : 'text-amber-200'} />
+        <Wind size={19} className={dashCooldown > 0 ? 'text-slate-500' : powerSet === 'agatha' ? 'text-purple-200' : powerSet === 'strange' ? 'text-orange-200' : 'text-amber-200'} />
         <span
           style={{
             fontSize: '7.5px',
             fontWeight: 800,
-            color: dashCooldown > 0 ? '#94a3b8' : powerSet === 'agatha' ? '#f3e8ff' : '#fef3c7',
+            color: dashCooldown > 0 ? '#94a3b8' : powerSet === 'agatha' ? '#f3e8ff' : powerSet === 'strange' ? '#ffedd5' : '#fef3c7',
             letterSpacing: '0.04em',
             zIndex: 2,
           }}
         >
-          {dashCooldown > 0 ? dashCooldown.toFixed(1) : powerSet === 'agatha' ? 'PASSO' : 'DASH'}
+          {dashCooldown > 0 ? dashCooldown.toFixed(1) : powerSet === 'agatha' ? 'PASSO' : powerSet === 'strange' ? 'PORTAL' : 'DASH'}
         </span>
       </div>
 
@@ -295,6 +348,8 @@ export const CombatButtons: React.FC<CombatButtonsProps> = ({
                 ? 'radial-gradient(circle at 35% 35%, #2a2d33, #16181b)'
                 : powerSet === 'agatha'
                 ? 'radial-gradient(circle at 35% 35%, #4c1d95, #1e0933)'
+                : powerSet === 'strange'
+                ? 'radial-gradient(circle at 35% 35%, #7c2d12, #2a1206)'
                 : powerSet === 'ironman'
                 ? 'radial-gradient(circle at 35% 35%, #3d2a1d, #1a1412)'
                 : 'radial-gradient(circle at 35% 35%, #343a46, #1b1e24)',
@@ -302,6 +357,8 @@ export const CombatButtons: React.FC<CombatButtonsProps> = ({
                 ? '1.5px solid rgba(255, 255, 255, 0.15)'
                 : powerSet === 'agatha'
                 ? '1.5px solid rgba(192, 132, 252, 0.75)'
+                : powerSet === 'strange'
+                ? '1.5px solid rgba(251, 146, 60, 0.75)'
                 : powerSet === 'ironman'
                 ? '1.5px solid rgba(245, 158, 11, 0.55)'
                 : '1.5px solid rgba(255, 255, 255, 0.45)',
@@ -309,6 +366,8 @@ export const CombatButtons: React.FC<CombatButtonsProps> = ({
                 ? '0 2px 6px rgba(0, 0, 0, 0.4)'
                 : powerSet === 'agatha'
                 ? '0 3px 10px rgba(0, 0, 0, 0.35), 0 0 10px rgba(168, 85, 247, 0.4)'
+                : powerSet === 'strange'
+                ? '0 3px 10px rgba(0, 0, 0, 0.35), 0 0 10px rgba(249, 115, 22, 0.4)'
                 : powerSet === 'ironman'
                 ? '0 3px 10px rgba(0, 0, 0, 0.35), 0 0 8px rgba(245, 158, 11, 0.25)'
                 : '0 3px 10px rgba(0, 0, 0, 0.35), 0 0 8px rgba(255, 255, 255, 0.08)',
@@ -377,6 +436,8 @@ export const CombatButtons: React.FC<CombatButtonsProps> = ({
             ? 'radial-gradient(circle at 35% 35%, #1f2b38, #0e1620)'
             : powerSet === 'agatha'
             ? 'radial-gradient(circle at 35% 35%, #581c87, #1e0933)'
+            : powerSet === 'strange'
+            ? 'radial-gradient(circle at 35% 35%, #9a3412, #3b1206)'
             : powerSet === 'ironman'
             ? 'radial-gradient(circle at 35% 35%, #7f1d1d, #2b0b0b)'
             : 'radial-gradient(circle at 35% 35%, #2c3e50, #16202c)',
@@ -386,6 +447,8 @@ export const CombatButtons: React.FC<CombatButtonsProps> = ({
             ? '2.5px solid rgba(255, 255, 255, 0.25)'
             : powerSet === 'agatha'
             ? '2.5px solid rgba(192, 132, 252, 0.95)'
+            : powerSet === 'strange'
+            ? '2.5px solid rgba(251, 146, 60, 0.95)'
             : powerSet === 'ironman'
             ? '2.5px solid rgba(239, 68, 68, 0.9)'
             : '2.5px solid rgba(72, 202, 228, 0.85)',
@@ -394,9 +457,13 @@ export const CombatButtons: React.FC<CombatButtonsProps> = ({
             : isAttackPressed
             ? powerSet === 'agatha'
               ? '0 2px 8px rgba(0, 0, 0, 0.5), 0 0 16px rgba(168, 85, 247, 0.55)'
+              : powerSet === 'strange'
+              ? '0 2px 8px rgba(0, 0, 0, 0.5), 0 0 16px rgba(251, 146, 60, 0.55)'
               : '0 2px 8px rgba(0, 0, 0, 0.5), 0 0 16px rgba(239, 68, 68, 0.45)'
             : powerSet === 'agatha'
             ? '0 6px 20px rgba(0, 0, 0, 0.45), 0 0 22px rgba(168, 85, 247, 0.5)'
+            : powerSet === 'strange'
+            ? '0 6px 20px rgba(0, 0, 0, 0.45), 0 0 22px rgba(249, 115, 22, 0.5)'
             : powerSet === 'ironman'
             ? '0 6px 20px rgba(0, 0, 0, 0.45), 0 0 18px rgba(239, 68, 68, 0.35)'
             : '0 6px 20px rgba(0, 0, 0, 0.45), 0 0 22px rgba(72, 202, 228, 0.35)',
@@ -429,6 +496,8 @@ export const CombatButtons: React.FC<CombatButtonsProps> = ({
             <Zap size={28} className="text-amber-300 animate-pulse drop-shadow-sm" />
           ) : powerSet === 'agatha' ? (
             <Sparkles size={28} className="text-purple-300 drop-shadow-sm" />
+          ) : powerSet === 'strange' ? (
+            <Orbit size={28} className="text-orange-300 drop-shadow-sm" />
           ) : powerSet === 'ironman' ? (
             <Zap size={28} className="text-red-300 drop-shadow-sm" />
           ) : (
@@ -439,11 +508,11 @@ export const CombatButtons: React.FC<CombatButtonsProps> = ({
               fontSize: isClashActive ? '11px' : '9px',
               fontWeight: 800,
               letterSpacing: '0.08em',
-              color: isClashActive ? '#fef08a' : powerSet === 'agatha' ? '#f3e8ff' : '#fecaca',
+              color: isClashActive ? '#fef08a' : powerSet === 'agatha' ? '#f3e8ff' : powerSet === 'strange' ? '#ffedd5' : '#fecaca',
               marginTop: '2px',
             }}
           >
-            {isClashActive ? 'PUSH!' : powerSet === 'agatha' ? 'RAJADA' : 'ATTACK'}
+            {isClashActive ? 'PUSH!' : powerSet === 'agatha' ? 'RAJADA' : powerSet === 'strange' ? 'DISCO' : 'ATTACK'}
           </span>
         </div>
       </div>

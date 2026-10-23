@@ -389,12 +389,16 @@ export default function App() {
               border:
                 powerSet === 'agatha'
                   ? '1.5px solid rgba(168, 85, 247, 0.85)'
+                  : powerSet === 'strange'
+                  ? '1.5px solid rgba(251, 146, 60, 0.85)'
                   : powerSet === 'ironman'
                   ? '1.5px solid rgba(245, 158, 11, 0.65)'
                   : '1.5px solid rgba(255, 255, 255, 0.22)',
               boxShadow:
                 powerSet === 'agatha'
                   ? '0 4px 14px rgba(0, 0, 0, 0.35), 0 0 12px rgba(168, 85, 247, 0.35)'
+                  : powerSet === 'strange'
+                  ? '0 4px 14px rgba(0, 0, 0, 0.35), 0 0 12px rgba(251, 146, 60, 0.35)'
                   : powerSet === 'ironman'
                   ? '0 4px 14px rgba(0, 0, 0, 0.35), 0 0 10px rgba(245, 158, 11, 0.2)'
                   : '0 4px 14px rgba(0, 0, 0, 0.35)',
@@ -415,13 +419,21 @@ export default function App() {
               className={
                 powerSet === 'agatha'
                   ? 'text-purple-400'
+                  : powerSet === 'strange'
+                  ? 'text-orange-400'
                   : powerSet === 'ironman'
                   ? 'text-amber-400'
                   : 'text-cyan-400'
               }
             />
             <span style={{ fontSize: '11px', fontWeight: 800, letterSpacing: '0.06em' }}>
-              {powerSet === 'agatha' ? 'AGATHA HARKNESS' : powerSet === 'ironman' ? 'HOMEM DE FERRO' : 'CLASSIC POWERS'}
+              {powerSet === 'agatha'
+                ? 'AGATHA HARKNESS'
+                : powerSet === 'strange'
+                ? 'DOUTOR ESTRANHO'
+                : powerSet === 'ironman'
+                ? 'HOMEM DE FERRO'
+                : 'CLASSIC POWERS'}
             </span>
           </button>
 

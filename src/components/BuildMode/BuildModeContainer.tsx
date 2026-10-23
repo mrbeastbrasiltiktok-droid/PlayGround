@@ -62,13 +62,23 @@ import { searchScripts, highlightTypeScript } from '../../game/ScriptSearch';
 import { ConfigPanel } from './ConfigPanel';
 import { BuildToast, ToastMessage } from './BuildToast';
 
+const CATEGORY_DOT: Record<ScriptCategory, string> = {
+  Configurações: 'bg-sky-400',
+  Habilidades: 'bg-violet-400',
+  Controladores: 'bg-cyan-400',
+  Restrições: 'bg-rose-400',
+  Combate: 'bg-orange-400',
+  'Interface & HUD': 'bg-emerald-400',
+  Sistemas: 'bg-zinc-400',
+};
+
 interface BuildModeContainerProps {
   gameScene: GameScene;
   onExitBuildMode: () => void;
   inspectTarget?: string | null;
   onSelectInspectTarget?: (target: string | null) => void;
-  currentPowerSet?: 'classic' | 'ironman' | 'agatha';
-  onSelectPowerSet?: (set: 'classic' | 'ironman' | 'agatha') => void;
+  currentPowerSet?: 'classic' | 'ironman' | 'agatha' | 'strange';
+  onSelectPowerSet?: (set: 'classic' | 'ironman' | 'agatha' | 'strange') => void;
   onExportProject?: () => void | Promise<void>;
   isExportingProject?: boolean;
 }
@@ -130,6 +140,7 @@ export const BuildModeContainer: React.FC<BuildModeContainerProps> = ({
   const highlightRef = useRef<HTMLPreElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const showToast = (text: string, type: 'info' | 'success' | 'warn' = 'info') => {
     const id = `toast-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
@@ -138,6 +149,23 @@ export const BuildModeContainer: React.FC<BuildModeContainerProps> = ({
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 3200);
   };
+
+  useEffect(() => {
+    const handleShortcut = (event: KeyboardEvent) => {
+      if (event.key !== '/' || event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+      ) {
+        return;
+      }
+      event.preventDefault();
+      searchInputRef.current?.focus();
+    };
+    window.addEventListener('keydown', handleShortcut);
+    return () => window.removeEventListener('keydown', handleShortcut);
+  }, []);
 
   // Subscribe to Restrictions
   useEffect(() => {
@@ -172,6 +200,38 @@ export const BuildModeContainer: React.FC<BuildModeContainerProps> = ({
   const filteredScripts = useMemo(() => {
     return searchScripts(allScripts, searchQuery, activeCategory).map((result) => result.script);
   }, [allScripts, activeCategory, searchQuery]);
+
+  const categoryCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const script of allScripts) {
+      counts.set(script.category, (counts.get(script.category) || 0) + 1);
+    }
+    return counts;
+  }, [allScripts]);
+
+  const groupedScripts = useMemo(() => {
+    if (activeCategory !== 'Todos') {
+      return filteredScripts.length > 0
+        ? [{ category: activeCategory as ScriptCategory, scripts: filteredScripts }]
+        : [];
+    }
+    return SCRIPT_TABS.map((tab) => ({
+      category: tab.id,
+      scripts: filteredScripts.filter((script) => script.category === tab.id),
+    })).filter((group) => group.scripts.length > 0);
+  }, [filteredScripts, activeCategory]);
+
+  const appliedCount = useMemo(
+    () =>
+      allScripts.filter((script) => {
+        const state = scriptRuntimeEngine.getScriptState(script.id);
+        return (
+          state.status === 'applied' ||
+          (state.capability === 'restart-required' && state.appliedSource !== null)
+        );
+      }).length,
+    [allScripts]
+  );
 
   const activeScript = useMemo(
     () => scriptRuntimeEngine.getScriptById(selectedScriptId) || allScripts[0],
@@ -698,153 +758,307 @@ export const BuildModeContainer: React.FC<BuildModeContainerProps> = ({
             ${mobileDrawer === 'left' ? 'fixed inset-y-12 left-0 w-72 flex shadow-2xl z-40' : 'hidden md:flex'}
           `}
         >
-          {/* Search Box */}
-          <div className="p-2.5 border-b border-[#27272a]">
-            <div className="relative">
+          <div className="border-b border-[#27272a] bg-gradient-to-b from-[#15151a] to-[#101013] px-3 pb-3 pt-3">
+            <div className="mb-2.5 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="grid h-7 w-7 place-items-center rounded-lg border border-cyan-500/20 bg-cyan-500/10">
+                  <FolderCode size={14} className="text-cyan-300" />
+                </div>
+                <div>
+                  <div className="text-[9px] font-semibold uppercase tracking-[0.18em] text-zinc-500">
+                    Explorer
+                  </div>
+                  <div className="text-[12px] font-semibold leading-tight text-zinc-100">
+                    Scripts do Projeto
+                  </div>
+                </div>
+              </div>
+              <span className="rounded-md border border-zinc-800 bg-[#0c0c0e] px-1.5 py-0.5 font-mono text-[10px] text-zinc-400">
+                {allScripts.length}
+              </span>
+            </div>
+
+            <div className="group relative">
               <Search
                 size={14}
-                className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[#71717a]"
+                className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-500 transition-colors group-focus-within:text-cyan-300"
               />
               <input
+                ref={searchInputRef}
                 type="text"
-                placeholder="Filtrar arquivos de script..."
+                placeholder="Buscar nome, arquivo ou tag..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full bg-[#18181b] border border-[#27272a] rounded px-2.5 pl-8 py-1.5 text-xs text-white placeholder-[#71717a] focus:outline-none focus:border-zinc-500"
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    setSearchQuery('');
+                    e.currentTarget.blur();
+                  }
+                }}
+                className="h-8 w-full rounded-md border border-[#2a2a30] bg-[#0b0b0d] pl-8 pr-8 text-[11px] text-white placeholder-zinc-600 outline-none transition-all focus:border-cyan-500/50 focus:ring-2 focus:ring-cyan-500/10"
               />
-              {searchQuery && (
+              {searchQuery ? (
                 <button
-                  onClick={() => setSearchQuery('')}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#71717a] hover:text-white"
+                  onClick={() => {
+                    setSearchQuery('');
+                    searchInputRef.current?.focus();
+                  }}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-zinc-500 transition-colors hover:text-white"
+                  aria-label="Limpar busca"
                 >
-                  <X size={13} />
+                  <X size={12} />
                 </button>
+              ) : (
+                <kbd className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border border-zinc-800 bg-zinc-900 px-1 font-mono text-[9px] text-zinc-500">
+                  /
+                </kbd>
               )}
             </div>
           </div>
 
-          {/* Categories Tab Selector */}
-          <div className="flex items-center gap-1 px-2.5 py-1.5 border-b border-[#27272a] overflow-x-auto text-[11px] no-scrollbar">
-            <button
-              onClick={() => setActiveCategory('Todos')}
-              className={`px-2 py-0.5 rounded whitespace-nowrap transition-colors ${
-                activeCategory === 'Todos'
-                  ? 'bg-[#27272a] text-white font-medium'
-                  : 'text-[#a1a1aa] hover:text-white'
-              }`}
-            >
-              Todos ({allScripts.length})
-            </button>
-            {SCRIPT_TABS.map((tab) => (
+          <div className="space-y-1.5 border-b border-[#27272a] px-2.5 py-2">
+            <div className="flex items-center justify-between px-0.5">
+              <span className="text-[9px] font-semibold uppercase tracking-[0.16em] text-zinc-500">
+                Categorias
+              </span>
+              {activeCategory !== 'Todos' && (
+                <button
+                  onClick={() => setActiveCategory('Todos')}
+                  className="text-[9px] font-medium text-cyan-400/90 transition-colors hover:text-cyan-300"
+                >
+                  Limpar
+                </button>
+              )}
+            </div>
+            <div className="explorer-categories grid grid-cols-2 gap-1">
               <button
-                key={tab.id}
-                onClick={() => setActiveCategory(tab.id)}
-                className={`px-2 py-0.5 rounded whitespace-nowrap transition-colors ${
-                  activeCategory === tab.id
-                    ? 'bg-[#27272a] text-white font-medium'
-                    : 'text-[#a1a1aa] hover:text-white'
+                onClick={() => setActiveCategory('Todos')}
+                className={`flex min-w-0 items-center justify-between gap-1 rounded-md border px-2 py-1 text-[10px] font-medium transition-colors ${
+                  activeCategory === 'Todos'
+                    ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
+                    : 'border-transparent bg-[#17171b] text-zinc-400 hover:bg-[#1d1d22] hover:text-zinc-200'
                 }`}
               >
-                {tab.label}
+                <span className="flex min-w-0 items-center gap-1">
+                  <span className="h-1 w-1 shrink-0 rounded-full bg-zinc-500" />
+                  <span className="truncate">Todos</span>
+                </span>
+                <span className="shrink-0 font-mono text-[9px] opacity-60">
+                  {allScripts.length}
+                </span>
               </button>
-            ))}
+              {SCRIPT_TABS.map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveCategory(tab.id)}
+                  title={tab.label}
+                  className={`flex min-w-0 items-center justify-between gap-1 rounded-md border px-2 py-1 text-[10px] font-medium transition-colors ${
+                    activeCategory === tab.id
+                      ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
+                      : 'border-transparent bg-[#17171b] text-zinc-400 hover:bg-[#1d1d22] hover:text-zinc-200'
+                  }`}
+                >
+                  <span className="flex min-w-0 items-center gap-1">
+                    <span
+                      className={`h-1 w-1 shrink-0 rounded-full ${CATEGORY_DOT[tab.id]}`}
+                    />
+                    <span className="truncate">{tab.label}</span>
+                  </span>
+                  <span className="shrink-0 font-mono text-[9px] opacity-60">
+                    {categoryCounts.get(tab.id) || 0}
+                  </span>
+                </button>
+              ))}
+            </div>
           </div>
 
-          {/* Script Items List */}
-          <div className="flex-1 overflow-y-auto p-1.5 space-y-0.5 font-sans">
+          <div className="script-explorer-scroll flex-1 overflow-y-auto py-2">
             {filteredScripts.length === 0 ? (
-              <div className="text-center py-8 text-xs text-[#71717a]">
-                Nenhum script encontrado
+              <div className="flex flex-col items-center px-6 py-12 text-center">
+                <div className="mb-3 grid h-10 w-10 place-items-center rounded-full border border-zinc-800 bg-[#15151a]">
+                  <Search size={16} className="text-zinc-600" />
+                </div>
+                <p className="text-[11px] font-medium text-zinc-300">Nenhum script encontrado</p>
+                <p className="mt-1 text-[10px] leading-relaxed text-zinc-600">
+                  Tente outro termo ou remova o filtro de categoria.
+                </p>
+                {(searchQuery || activeCategory !== 'Todos') && (
+                  <button
+                    onClick={() => {
+                      setSearchQuery('');
+                      setActiveCategory('Todos');
+                    }}
+                    className="mt-3 rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-[10px] font-medium text-zinc-300 transition-colors hover:border-zinc-600 hover:text-white"
+                  >
+                    Limpar filtros
+                  </button>
+                )}
               </div>
             ) : (
-              filteredScripts.map((script) => {
-                const isSelected = script.id === selectedScriptId;
-                const status = scriptRuntimeEngine.getScriptStatus(script.id);
-                const state = scriptRuntimeEngine.getScriptState(script.id);
-                const hasApplied = status.status === 'applied';
-                const hasRestartApplied =
-                  state.capability === 'restart-required' && state.appliedSource !== null;
-                const hasError = status.status === 'error';
+              groupedScripts.map((group) => (
+                <section key={group.category} className="mb-1.5 last:mb-0">
+                  <div className="sticky top-0 z-10 flex items-center gap-1.5 bg-[#101013]/95 px-3 py-1.5 backdrop-blur-sm">
+                    <span className={`h-1.5 w-1.5 rounded-full ${CATEGORY_DOT[group.category]}`} />
+                    <span className="text-[9px] font-semibold uppercase tracking-[0.14em] text-zinc-500">
+                      {group.category}
+                    </span>
+                    <span className="ml-auto font-mono text-[9px] text-zinc-600">
+                      {group.scripts.length}
+                    </span>
+                  </div>
+                  <div className="space-y-0.5 px-2">
+                    {group.scripts.map((script) => {
+                      const isSelected = script.id === selectedScriptId;
+                      const status = scriptRuntimeEngine.getScriptStatus(script.id);
+                      const state = scriptRuntimeEngine.getScriptState(script.id);
+                      const hasApplied = status.status === 'applied';
+                      const hasRestartApplied =
+                        state.capability === 'restart-required' && state.appliedSource !== null;
+                      const hasError = status.status === 'error';
+                      const statusLabel = hasError
+                        ? 'ERRO'
+                        : hasApplied
+                        ? 'ATIVO'
+                        : hasRestartApplied
+                        ? 'REBUILD'
+                        : state.hasDraftChanges
+                        ? 'EDIT'
+                        : null;
+                      const statusClass = hasError
+                        ? 'border-rose-500/30 bg-rose-500/10 text-rose-300'
+                        : hasApplied
+                        ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                        : hasRestartApplied
+                        ? 'border-cyan-500/30 bg-cyan-500/10 text-cyan-300'
+                        : 'border-amber-500/30 bg-amber-500/10 text-amber-300';
+                      const integration = script.runtimeIntegration || 'hot-swap';
 
-                return (
-                  <button
-                    key={script.id}
-                    onClick={() => {
-                      audioSystem.playUiClick?.();
-                      setSelectedScriptId(script.id);
-                      setMobileDrawer('none');
-                    }}
-                    className={`w-full text-left p-2 rounded flex items-start justify-between gap-2 transition-colors ${
-                      isSelected
-                        ? 'bg-[#27272a] text-white'
-                        : 'hover:bg-[#18181b] text-[#d4d4d8]'
-                    }`}
-                  >
-                    <div className="flex items-start gap-2 min-w-0">
-                      <FileCode
-                        size={15}
-                        className={`mt-0.5 shrink-0 ${
-                          script.character === 'agatha'
-                            ? 'text-purple-400'
-                            : script.character === 'ironman'
-                            ? 'text-cyan-400'
-                            : 'text-[#a1a1aa]'
-                        }`}
-                      />
-                      <div className="min-w-0">
-                        <div className="text-xs font-medium truncate leading-tight">
-                          {script.name}
-                        </div>
-                        <div className="text-[10px] text-[#71717a] font-mono truncate mt-0.5">
-                          {script.filePath.split('/').pop()}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="shrink-0 flex items-center gap-1 mt-0.5">
-                      {(script.runtimeIntegration || 'hot-swap') !== 'hot-swap' && (
-                        <span
-                          className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0"
-                          title="Exige reinicialização do jogo"
-                        />
-                      )}
-                      {hasError ? (
-                        <span
-                          className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0"
-                          title="Erro na compilação"
-                        />
-                      ) : hasApplied ? (
-                        <span
-                          className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0"
-                          title="Aplicado e ativo no jogo"
-                        />
-                      ) : hasRestartApplied ? (
-                        <span
-                          className="w-1.5 h-1.5 rounded-full bg-cyan-500 shrink-0"
-                          title="Aplicado para o próximo build/reinício"
-                        />
-                      ) : (
-                        <span
-                          className="w-1.5 h-1.5 rounded-full bg-zinc-600 shrink-0"
-                          title="Pendente"
-                        />
-                      )}
-                    </div>
-                  </button>
-                );
-              })
+                      return (
+                        <button
+                          key={script.id}
+                          onClick={() => {
+                            audioSystem.playUiClick?.();
+                            setSelectedScriptId(script.id);
+                            setMobileDrawer('none');
+                          }}
+                          aria-current={isSelected ? 'true' : undefined}
+                          title={`${script.name}\n${script.filePath}`}
+                          className={`group relative flex w-full items-start gap-2 rounded-lg border px-2 py-2 text-left transition-all duration-150 ${
+                            isSelected
+                              ? 'border-cyan-500/25 bg-gradient-to-r from-cyan-500/[0.10] to-transparent'
+                              : 'border-transparent hover:border-zinc-800 hover:bg-[#17171b]'
+                          }`}
+                        >
+                          {isSelected && (
+                            <span className="absolute bottom-2 left-0 top-2 w-[2px] rounded-full bg-cyan-400" />
+                          )}
+                          <div
+                            className={`mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-md border ${
+                              isSelected
+                                ? 'border-cyan-500/30 bg-cyan-500/10'
+                                : 'border-zinc-800 bg-[#141417]'
+                            }`}
+                          >
+                            <FileCode
+                              size={13}
+                              className={
+                                script.character === 'agatha'
+                                  ? 'text-purple-400'
+                                  : script.character === 'ironman'
+                                  ? 'text-cyan-400'
+                                  : 'text-zinc-400'
+                              }
+                            />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5">
+                              <span
+                                className={`truncate text-[11.5px] font-medium leading-tight ${
+                                  isSelected
+                                    ? 'text-white'
+                                    : 'text-zinc-300 group-hover:text-white'
+                                }`}
+                              >
+                                {script.name}
+                              </span>
+                              {state.hasUnappliedChanges && (
+                                <span
+                                  className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400"
+                                  title="Alterações no editor ainda não aplicadas"
+                                />
+                              )}
+                            </div>
+                            <div className="mt-1 flex min-w-0 items-center gap-1">
+                              <span className="truncate font-mono text-[9.5px] text-zinc-500">
+                                {script.filePath.split('/').pop()}
+                              </span>
+                              {integration !== 'hot-swap' && (
+                                <span
+                                  className={`shrink-0 rounded border px-1 py-px text-[8px] font-bold uppercase tracking-wide ${
+                                    integration === 'read-only'
+                                      ? 'border-zinc-700 bg-zinc-800 text-zinc-400'
+                                      : 'border-amber-500/25 bg-amber-500/10 text-amber-300'
+                                  }`}
+                                >
+                                  {integration === 'read-only' ? 'RO' : 'REBUILD'}
+                                </span>
+                              )}
+                              {script.isUserCreated && (
+                                <span className="shrink-0 rounded border border-cyan-500/25 bg-cyan-500/10 px-1 py-px text-[8px] font-bold uppercase tracking-wide text-cyan-300">
+                                  USER
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex shrink-0 items-center pt-0.5">
+                            {statusLabel ? (
+                              <span
+                                className={`rounded border px-1 py-0.5 text-[8px] font-bold tracking-wide ${statusClass}`}
+                              >
+                                {statusLabel}
+                              </span>
+                            ) : (
+                              <span
+                                className="h-1.5 w-1.5 rounded-full bg-zinc-700"
+                                title="Pendente"
+                              />
+                            )}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+              ))
             )}
           </div>
 
-          {/* Quick Footer Stats & Global Restore */}
-          <div className="p-2 border-t border-[#27272a] text-[10px] text-[#71717a] flex items-center justify-between">
-            <span>{filteredScripts.length} módulos</span>
+          <div className="space-y-2 border-t border-[#27272a] bg-[#0f0f12] px-2.5 py-2">
+            <div className="flex items-center justify-between px-0.5 text-[10px]">
+              <span className="text-zinc-500">
+                <b className="font-semibold text-zinc-300">{filteredScripts.length}</b> de{' '}
+                {allScripts.length} módulos
+              </span>
+              <span
+                className={`flex items-center gap-1 ${
+                  appliedCount > 0 ? 'text-emerald-400/80' : 'text-zinc-500'
+                }`}
+              >
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${
+                    appliedCount > 0 ? 'bg-emerald-500' : 'bg-zinc-600'
+                  }`}
+                />
+                {appliedCount} aplicados
+              </span>
+            </div>
             <button
               onClick={handleRestoreAll}
-              className="text-[#a1a1aa] hover:text-amber-400 transition-colors underline decoration-dotted"
+              className="flex w-full items-center justify-center gap-1.5 rounded-md border border-amber-500/20 bg-amber-500/[0.06] px-2 py-1.5 text-[10px] font-semibold text-amber-300/90 transition-colors hover:border-amber-500/40 hover:bg-amber-500/10 hover:text-amber-200"
               title="Restaurar todos os scripts para o padrão de fábrica"
             >
-              Restaurar Todos
+              <RotateCcw size={11} />
+              Restaurar originais
             </button>
           </div>
         </aside>

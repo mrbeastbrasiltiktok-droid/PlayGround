@@ -1,8 +1,8 @@
 import React from 'react';
-import { X, Sparkles, Shield, Rocket, Zap, Crosshair, Orbit, Flame } from 'lucide-react';
+import { X, Sparkles, Shield, Rocket, Zap, Crosshair, Orbit, Flame, Wind, Plane, Sword } from 'lucide-react';
 import { audioSystem } from '../game/AudioSystem';
 
-export type PowerSetType = 'ironman' | 'agatha' | 'classic';
+export type PowerSetType = 'ironman' | 'agatha' | 'classic' | 'strange';
 
 interface PowerSelectModalProps {
   isOpen: boolean;
@@ -10,6 +10,27 @@ interface PowerSelectModalProps {
   onSelect: (set: PowerSetType) => void;
   onClose: () => void;
 }
+
+const iconBubbleStyle = (bg: string, border: string): React.CSSProperties => ({
+  width: '28px',
+  height: '28px',
+  borderRadius: '50%',
+  backgroundColor: bg,
+  border: `1px solid ${border}`,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+});
+
+const activeBadgeStyle = (bg: string): React.CSSProperties => ({
+  fontSize: '10px',
+  fontWeight: 700,
+  letterSpacing: '0.06em',
+  backgroundColor: bg,
+  color: bg === '#38bdf8' ? '#000000' : '#ffffff',
+  padding: '2px 8px',
+  borderRadius: '12px',
+});
 
 export const PowerSelectModal: React.FC<PowerSelectModalProps> = ({
   isOpen,
@@ -125,18 +146,7 @@ export const PowerSelectModal: React.FC<PowerSelectModalProps> = ({
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <div
-                  style={{
-                    width: '28px',
-                    height: '28px',
-                    borderRadius: '50%',
-                    backgroundColor: 'rgba(147, 51, 234, 0.25)',
-                    border: '1px solid #c084fc',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
+                <div style={iconBubbleStyle('rgba(147, 51, 234, 0.25)', '#c084fc')}>
                   <Sparkles size={15} className="text-purple-300" />
                 </div>
                 <span style={{ fontSize: '14px', fontWeight: 700, color: '#ffffff' }}>
@@ -144,19 +154,7 @@ export const PowerSelectModal: React.FC<PowerSelectModalProps> = ({
                 </span>
               </div>
               {activeSet === 'agatha' && (
-                <span
-                  style={{
-                    fontSize: '10px',
-                    fontWeight: 700,
-                    letterSpacing: '0.06em',
-                    backgroundColor: '#a855f7',
-                    color: '#ffffff',
-                    padding: '2px 8px',
-                    borderRadius: '12px',
-                  }}
-                >
-                  ATIVO
-                </span>
+                <span style={activeBadgeStyle('#a855f7')}>ATIVO</span>
               )}
             </div>
 
@@ -191,6 +189,67 @@ export const PowerSelectModal: React.FC<PowerSelectModalProps> = ({
             </p>
           </div>
 
+          {/* Doctor Strange Power Set */}
+          <div
+            onClick={() => handleSelect('strange')}
+            style={{
+              padding: '14px 16px',
+              borderRadius: '12px',
+              border: activeSet === 'strange' ? '1.5px solid #ffaa00' : '1px solid rgba(255, 170, 0, 0.25)',
+              backgroundColor: activeSet === 'strange' ? 'rgba(255, 170, 0, 0.12)' : 'rgba(255, 170, 0, 0.03)',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '8px',
+            }}
+            className="hover:border-orange-500/80"
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div style={iconBubbleStyle('rgba(255, 170, 0, 0.2)', '#ffaa00')}>
+                  <Sparkles size={15} className="text-orange-400" />
+                </div>
+                <span style={{ fontSize: '14px', fontWeight: 700, color: '#ffffff' }}>
+                  Doutor Estranho (Artes Místicas)
+                </span>
+              </div>
+              {activeSet === 'strange' && (
+                <span style={activeBadgeStyle('#ffaa00')}>ATIVO</span>
+              )}
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '6px', marginTop: '4px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#fff4e6' }}>
+                <Sword size={13} className="text-orange-400 shrink-0" />
+                <span>Disco Místico Laranja (Ataque Básico)</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#fff4e6' }}>
+                <Zap size={13} className="text-orange-400 shrink-0" />
+                <span>Feixe Místico Laranja (3s Canalizado)</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#fff4e6' }}>
+                <Shield size={13} className="text-orange-400 shrink-0" />
+                <span>Escudo Místico Circular (4s)</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#fff4e6' }}>
+                <Crosshair size={13} className="text-green-400 shrink-0" />
+                <span>Explosão Mística Verde (Área)</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#fff4e6' }}>
+                <Plane size={13} className="text-orange-400 shrink-0" />
+                <span>Voo Místico com Capa</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#fff4e6' }}>
+                <Wind size={13} className="text-orange-400 shrink-0" />
+                <span>Passo do Portal (Dash Duplo)</span>
+              </div>
+            </div>
+            <p style={{ fontSize: '11px', color: '#ffaa00', margin: '2px 0 0 0' }}>
+              ✦ Artes místicas cinemáticas inspiradas nos filmes da Marvel.
+            </p>
+          </div>
+
           {/* Iron Man Power Set */}
           <div
             onClick={() => handleSelect('ironman')}
@@ -209,18 +268,7 @@ export const PowerSelectModal: React.FC<PowerSelectModalProps> = ({
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <div
-                  style={{
-                    width: '28px',
-                    height: '28px',
-                    borderRadius: '50%',
-                    backgroundColor: 'rgba(239, 68, 68, 0.2)',
-                    border: '1px solid #ef4444',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
+                <div style={iconBubbleStyle('rgba(239, 68, 68, 0.2)', '#ef4444')}>
                   <Rocket size={15} className="text-amber-400" />
                 </div>
                 <span style={{ fontSize: '14px', fontWeight: 700, color: '#ffffff' }}>
@@ -228,19 +276,7 @@ export const PowerSelectModal: React.FC<PowerSelectModalProps> = ({
                 </span>
               </div>
               {activeSet === 'ironman' && (
-                <span
-                  style={{
-                    fontSize: '10px',
-                    fontWeight: 700,
-                    letterSpacing: '0.06em',
-                    backgroundColor: '#f59e0b',
-                    color: '#000000',
-                    padding: '2px 8px',
-                    borderRadius: '12px',
-                  }}
-                >
-                  ATIVO
-                </span>
+                <span style={activeBadgeStyle('#f59e0b')}>ATIVO</span>
               )}
             </div>
 
@@ -282,18 +318,7 @@ export const PowerSelectModal: React.FC<PowerSelectModalProps> = ({
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <div
-                  style={{
-                    width: '28px',
-                    height: '28px',
-                    borderRadius: '50%',
-                    backgroundColor: 'rgba(56, 189, 248, 0.2)',
-                    border: '1px solid #38bdf8',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
+                <div style={iconBubbleStyle('rgba(56, 189, 248, 0.2)', '#38bdf8')}>
                   <Shield size={15} className="text-cyan-400" />
                 </div>
                 <span style={{ fontSize: '14px', fontWeight: 700, color: '#ffffff' }}>
@@ -301,19 +326,7 @@ export const PowerSelectModal: React.FC<PowerSelectModalProps> = ({
                 </span>
               </div>
               {activeSet === 'classic' && (
-                <span
-                  style={{
-                    fontSize: '10px',
-                    fontWeight: 700,
-                    letterSpacing: '0.06em',
-                    backgroundColor: '#38bdf8',
-                    color: '#000000',
-                    padding: '2px 8px',
-                    borderRadius: '12px',
-                  }}
-                >
-                  ACTIVE
-                </span>
+                <span style={activeBadgeStyle('#38bdf8')}>ACTIVE</span>
               )}
             </div>
             <p style={{ fontSize: '11.5px', color: '#9ca3af', margin: '2px 0 0 0' }}>

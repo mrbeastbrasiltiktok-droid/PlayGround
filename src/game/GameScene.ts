@@ -5,6 +5,7 @@ import { TargetDummy } from './TargetDummy';
 import { ProjectileSystem } from './ProjectileSystem';
 import { IronManAbilities } from './IronManAbilities';
 import { AgathaAbilities } from './AgathaAbilities';
+import { DoctorStrangeAbilities } from './DoctorStrangeAbilities';
 import { audioSystem } from './AudioSystem';
 import { settingsManager, GameSettings, ReticlePosition } from './SettingsManager';
 import { BuildModeManager } from './BuildModeManager';
@@ -44,7 +45,8 @@ export class GameScene {
   private projectileSystem: ProjectileSystem;
   public ironManAbilities!: IronManAbilities;
   public agathaAbilities!: AgathaAbilities;
-  public currentPowerSet: 'classic' | 'ironman' | 'agatha' = 'ironman';
+  public doctorStrangeAbilities!: DoctorStrangeAbilities;
+  public currentPowerSet: 'classic' | 'ironman' | 'agatha' | 'strange' = 'ironman';
 
   // Dummies & Obstacles
   public dummies: TargetDummy[] = [];
@@ -276,6 +278,39 @@ export class GameScene {
     );
     this.agathaAbilities.onArcaneCast = (hand, aimPitch) => {
       this.animController.triggerRepulsor(hand, aimPitch);
+    };
+
+    // 8c. Doctor Strange Mystic Arts Abilities System
+    this.doctorStrangeAbilities = new DoctorStrangeAbilities(
+      this.scene,
+      this.stickman,
+      () => {
+        if (this.settings.aimAssist && this.activeTarget && !this.activeTarget.isDead) {
+          return { pos: this.activeTarget.getCenter(), target: this.activeTarget };
+        }
+        return { pos: this.currentAimPoint.clone(), target: null };
+      },
+      (dummy, dmg, hitPos, kb) => {
+        const res = dummy.takeDamage(dmg, hitPos, kb);
+        if (res.actualDamage > 0) {
+          this.triggerHitConfirm();
+        }
+        this.projectileSystem.damageNumbers.push({
+          id: (this.projectileSystem as unknown as { nextDamageId: number }).nextDamageId++,
+          value: res.actualDamage,
+          worldPos: hitPos.clone().add(new THREE.Vector3(0, 0.4, 0)),
+          age: 0,
+          maxAge: 0.95,
+        });
+      },
+      (amt) => {
+        if (this.settings.cameraShake) {
+          this.addCameraShake(amt);
+        }
+      }
+    );
+    this.doctorStrangeAbilities.onDiscCast = (aimPitch) => {
+      this.animController.triggerRepulsor('right', aimPitch);
     };
 
     // 9. Apply initial graphics settings
@@ -576,7 +611,7 @@ export class GameScene {
     ).normalize();
   }
 
-  public setPowerSet(set: 'classic' | 'ironman' | 'agatha'): void {
+  public setPowerSet(set: 'classic' | 'ironman' | 'agatha' | 'strange'): void {
     this.currentPowerSet = set;
     this.animController.isAgatha = set === 'agatha';
     this.respawnPlayer();
@@ -615,10 +650,17 @@ export class GameScene {
       this.agathaAbilities.cancelArcaneChoke();
       this.agathaAbilities.isArcaneFlightActive = false;
     }
+    if (this.doctorStrangeAbilities) {
+      this.doctorStrangeAbilities.cancelAll();
+    }
     this.animController.dualBeamActive = false;
     this.animController.spinningLasersActive = false;
     this.animController.darkDrainActive = false;
     this.animController.arcaneChokeActive = false;
+    this.animController.strangeBeamActive = false;
+    this.animController.strangeBeamPitch = 0;
+    this.animController.strangeShieldActive = false;
+    this.animController.strangeChargeActive = false;
 
     this.stickman.thrusters.leftFoot.setIntensity(0);
     this.stickman.thrusters.rightFoot.setIntensity(0);
@@ -626,9 +668,14 @@ export class GameScene {
     this.stickman.thrusters.rightHand.setIntensity(0);
 
     // Particle spawn chime
-    this.projectileSystem.emitImpactParticles(new THREE.Vector3(0, 1, 0), 25, this.currentPowerSet === 'agatha' ? 0xa855f7 : 0x00f0ff);
+    const spawnColor =
+      this.currentPowerSet === 'agatha' ? 0xa855f7 :
+      this.currentPowerSet === 'strange' ? 0xff8c1a : 0x00f0ff;
+    this.projectileSystem.emitImpactParticles(new THREE.Vector3(0, 1, 0), 25, spawnColor);
     if (this.currentPowerSet === 'agatha') {
       audioSystem.playShadowStep();
+    } else if (this.currentPowerSet === 'strange') {
+      audioSystem.playArcaneBlast();
     } else {
       audioSystem.playRepulsor();
     }
@@ -672,6 +719,17 @@ export class GameScene {
         }
       }
       return false;
+    }
+
+    if (this.currentPowerSet === 'strange') {
+      const aim = this.settings.aimAssist && this.activeTarget && !this.activeTarget.isDead
+        ? { pos: this.activeTarget.getCenter() }
+        : { pos: this.currentAimPoint.clone() };
+      const handPos = new THREE.Vector3();
+      this.stickman.rightHand.getWorldPosition(handPos);
+      const toAim = aim.pos.clone().sub(handPos).normalize();
+      const aimPitch = Math.asin(THREE.MathUtils.clamp(toAim.y, -0.99, 0.99));
+      return this.doctorStrangeAbilities.fireDisc(aimPitch);
     }
 
     if (this.currentPowerSet === 'ironman') {
@@ -771,6 +829,22 @@ export class GameScene {
       return false;
     }
 
+    if (this.currentPowerSet === 'strange' && this.doctorStrangeAbilities) {
+      this.orientCharacterToAim();
+      if (id === 1) {
+        if (this.doctorStrangeAbilities.isBeamActive) {
+          this.doctorStrangeAbilities.stopBeam();
+          return true;
+        }
+        return this.doctorStrangeAbilities.startBeam();
+      } else if (id === 2) {
+        return this.doctorStrangeAbilities.triggerShield(this.playerPos, this.playerRotationY, this.dummies);
+      } else if (id === 3) {
+        return this.doctorStrangeAbilities.triggerExplosion();
+      }
+      return false;
+    }
+
     if (this.currentPowerSet === 'ironman' && this.ironManAbilities) {
       this.orientCharacterToAim();
       if (typeof (this.ironManAbilities as any).triggerAbility === 'function') {
@@ -838,6 +912,36 @@ export class GameScene {
       }
     }
 
+    // Doctor Strange: Etapa do Portal Místico
+    if (this.currentPowerSet === 'strange' && this.doctorStrangeAbilities) {
+      const dir = this.getMovementDirection();
+      const success = this.doctorStrangeAbilities.triggerPortalStep(
+        this.playerPos,
+        dir,
+        this.structureBoxes,
+        {
+          setPlayerPos: (x, z) => {
+            this.playerPos.x = x;
+            this.playerPos.z = z;
+            this.stickman.root.position.x = x;
+            this.stickman.root.position.z = z;
+          },
+          setPlayerRotationY: (ry) => {
+            this.playerRotationY = ry;
+            this.targetRotationY = ry;
+          },
+          setPlayerVisible: (v) => {
+            this.stickman.root.visible = v;
+          },
+        }
+      );
+      if (success) {
+        this.dashCooldownRemaining = this.doctorStrangeAbilities.portalModule.totalCooldown;
+        return true;
+      }
+      return false;
+    }
+
     // Determine dash direction
     const dir = this.getMovementDirection();
 
@@ -874,6 +978,9 @@ export class GameScene {
       if (this.agathaAbilities) {
         this.agathaAbilities.isArcaneFlightActive = this.isFlying;
       }
+    } else if (this.currentPowerSet === 'strange') {
+      // Strange Mystic Flight: sync flight state with ability module
+      this.doctorStrangeAbilities?.syncFlightState(this.isFlying);
     } else {
       audioSystem.playFlightToggle(this.isFlying);
     }
@@ -1043,7 +1150,15 @@ export class GameScene {
     camRight.crossVectors(camForward, new THREE.Vector3(0, 1, 0)).normalize();
 
     const moveDir = new THREE.Vector3();
-    const effectiveMaxSpeed = this.isFlying ? this.flightMaxSpeed : this.groundMaxSpeed;
+    const strangeFlightSpeed = this.currentPowerSet === 'strange' && this.doctorStrangeAbilities
+      ? this.doctorStrangeAbilities.getFlightInfo().speed
+      : null;
+    const effectiveMaxSpeed = this.isFlying
+      ? (strangeFlightSpeed ?? this.flightMaxSpeed)
+      : this.groundMaxSpeed;
+    const speedDamp = this.currentPowerSet === 'strange' && this.doctorStrangeAbilities
+      ? this.doctorStrangeAbilities.getFlightInfo().accelerationDamp
+      : 28.0;
 
     if (normalizedMagnitude > 0) {
       moveDir.addScaledVector(camRight, normX);
@@ -1051,7 +1166,7 @@ export class GameScene {
       moveDir.normalize();
 
       const targetSpeed = normalizedMagnitude * effectiveMaxSpeed;
-      this.currentSpeed = THREE.MathUtils.damp(this.currentSpeed, targetSpeed, 28.0, dt);
+      this.currentSpeed = THREE.MathUtils.damp(this.currentSpeed, targetSpeed, speedDamp, dt);
 
       // If spinning lasers are active, do not let movement direction override playerRotationY so spin continues uninterrupted
       if (!this.ironManAbilities || !this.ironManAbilities.isSpinningLasersActive) {
@@ -1066,10 +1181,10 @@ export class GameScene {
       }
     } else {
       this.currentSpeed = THREE.MathUtils.damp(this.currentSpeed, 0, 30.0, dt);
+      this.flightBankRoll = THREE.MathUtils.damp(this.flightBankRoll, 0, 10.0, dt);
       if (this.currentSpeed < 0.005) {
         this.currentSpeed = 0;
       }
-      this.flightBankRoll = THREE.MathUtils.damp(this.flightBankRoll, 0, 10.0, dt);
     }
 
     // 3. Move player position horizontally with solid structure collision check
@@ -1149,8 +1264,8 @@ export class GameScene {
     this.stickman.contactShadow.scale.set(shadowScale, shadowScale, 1.0);
     (this.stickman.contactShadow.material as THREE.MeshBasicMaterial).opacity = shadowOpacity;
 
-    // Repulsor & Thruster Jet Flares (Disabled for Agatha Harkness who uses dark magic aura)
-    if (this.currentPowerSet === 'agatha') {
+    // Repulsor & Thruster Jet Flares (Disabled for Agatha Harkness & Doctor Strange who use magic FX)
+    if (this.currentPowerSet === 'agatha' || this.currentPowerSet === 'strange') {
       this.stickman.thrusters.leftFoot.setIntensity(0);
       this.stickman.thrusters.rightFoot.setIntensity(0);
       this.stickman.thrusters.leftHand.setIntensity(0);
@@ -1242,7 +1357,39 @@ export class GameScene {
       }
     }
 
-    // 6d. Handle Build Mode Camera (Free-Fly navigation & Orbit around focus point)
+    // 6d. Update Doctor Strange Abilities (Mystic Disc, Beam, Shield, Explosion, Flight, Portal Step)
+    if (this.doctorStrangeAbilities) {
+      try {
+        this.doctorStrangeAbilities.update(
+          dt,
+          this.playerPos,
+          this.dummies,
+          this.playerRotationY,
+          this.isFlying
+        );
+        if (this.animController) {
+          this.animController.strangeBeamActive =
+            this.currentPowerSet === 'strange' && this.doctorStrangeAbilities.isBeamActive;
+          this.animController.strangeBeamPitch = this.camPitch;
+          this.animController.strangeShieldActive =
+            this.currentPowerSet === 'strange' && this.doctorStrangeAbilities.isShieldActive;
+          this.animController.strangeChargeActive =
+            this.currentPowerSet === 'strange' && this.doctorStrangeAbilities.isExplosionCharging;
+        }
+
+        // While channeling the Mystic Beam or charging the Green Explosion, lock gaze toward aim
+        if (
+          this.currentPowerSet === 'strange' &&
+          (this.doctorStrangeAbilities.isBeamActive || this.doctorStrangeAbilities.isExplosionCharging)
+        ) {
+          this.orientCharacterToAim();
+        }
+      } catch (err) {
+        console.warn('Error in DoctorStrangeAbilities update loop:', err);
+      }
+    }
+
+    // 6e. Handle Build Mode Camera (Free-Fly navigation & Orbit around focus point)
     if (this.isBuildMode) {
       this.updateFreeFlyCamera(dt);
 
@@ -1448,6 +1595,12 @@ export class GameScene {
       }
       if (this.agathaAbilities?.isDarkDrainActive) {
         this.agathaAbilities.isDarkDrainActive = false;
+      }
+      if (this.doctorStrangeAbilities) {
+        this.doctorStrangeAbilities.cancelAll();
+        this.animController.strangeBeamActive = false;
+        this.animController.strangeShieldActive = false;
+        this.animController.strangeChargeActive = false;
       }
 
       // Initialize build camera around player or selected object
@@ -1805,6 +1958,13 @@ export class GameScene {
     if (this.stickman) {
       this.scene.remove(this.stickman.root);
     }
+    if (this.doctorStrangeAbilities) {
+      try {
+        this.doctorStrangeAbilities.dispose();
+      } catch (err) {
+        console.warn('Error disposing DoctorStrangeAbilities on rig update:', err);
+      }
+    }
     this.stickman = rigFactory();
     this.scene.add(this.stickman.root);
     this.stickman.root.position.copy(this.playerPos);
@@ -1812,6 +1972,37 @@ export class GameScene {
     this.animController = new AnimationController(this.stickman);
     this.animController.isFlying = this.isFlying;
     this.animController.isAgatha = this.currentPowerSet === 'agatha';
+    this.doctorStrangeAbilities = new DoctorStrangeAbilities(
+      this.scene,
+      this.stickman,
+      () => {
+        if (this.settings.aimAssist && this.activeTarget && !this.activeTarget.isDead) {
+          return { pos: this.activeTarget.getCenter(), target: this.activeTarget };
+        }
+        return { pos: this.currentAimPoint.clone(), target: null };
+      },
+      (dummy, dmg, hitPos, kb) => {
+        const res = dummy.takeDamage(dmg, hitPos, kb);
+        if (res.actualDamage > 0) {
+          this.triggerHitConfirm();
+        }
+        this.projectileSystem.damageNumbers.push({
+          id: (this.projectileSystem as any).nextDamageId++,
+          value: res.actualDamage,
+          worldPos: hitPos.clone().add(new THREE.Vector3(0, 0.4, 0)),
+          age: 0,
+          maxAge: 0.95,
+        });
+      },
+      (amt) => {
+        if (this.settings.cameraShake) {
+          this.addCameraShake(amt);
+        }
+      }
+    );
+    this.doctorStrangeAbilities.onDiscCast = (aimPitch) => {
+      this.animController.triggerRepulsor('right', aimPitch);
+    };
   }
 
   public updateTargetDummyClass(NewClass: any): void {
@@ -1891,6 +2082,9 @@ export class GameScene {
     }
     if (this.agathaAbilities) {
       this.agathaAbilities.dispose();
+    }
+    if (this.doctorStrangeAbilities) {
+      this.doctorStrangeAbilities.dispose();
     }
 
     if (this.renderer.domElement && this.renderer.domElement.parentNode) {

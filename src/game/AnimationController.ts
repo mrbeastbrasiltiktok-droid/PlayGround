@@ -34,6 +34,12 @@ export class AnimationController {
   public runicWardTime: number = 0;
   public isAgatha: boolean = false;
 
+  // Doctor Strange sustained poses (Mystic Beam, Mystic Shield, Green Explosion charge)
+  public strangeBeamActive: boolean = false;
+  public strangeBeamPitch: number = 0;
+  public strangeShieldActive: boolean = false;
+  public strangeChargeActive: boolean = false;
+
   // Flight & Dash locomotion states
   public isFlying: boolean = false;
   public flightBlend: number = 0; // 0 = ground, 1 = flying
@@ -450,6 +456,50 @@ export class AnimationController {
 
       targetWaistRotX = -0.05;
       targetHeadRotX = 0.22;
+    } else if (this.strangeBeamActive) {
+      targetRightShoulderRotX = 1.46 + this.strangeBeamPitch;
+      targetRightShoulderRotY = 0.06;
+      targetRightShoulderRotZ = 0.08;
+      targetRightElbowRotX = 0.08;
+      targetRightWristRotX = -0.18;
+
+      targetLeftShoulderRotX = -0.18;
+      targetLeftShoulderRotZ = -0.34;
+      targetLeftElbowRotX = 0.55;
+      targetWaistRotX = -0.1;
+      targetWaistRotY -= 0.08;
+      targetHeadRotX = this.strangeBeamPitch * 0.4;
+    } else if (this.strangeShieldActive) {
+      targetRightShoulderRotX = 1.32;
+      targetRightShoulderRotY = 0.1;
+      targetRightShoulderRotZ = 0.12;
+      targetRightElbowRotX = 0.14;
+      targetRightWristRotX = -0.12;
+
+      targetLeftShoulderRotX = 1.32;
+      targetLeftShoulderRotY = -0.1;
+      targetLeftShoulderRotZ = -0.12;
+      targetLeftElbowRotX = 0.14;
+      targetLeftWristRotX = -0.12;
+
+      targetWaistRotX = -0.06;
+      targetHeadRotX = -0.05;
+    } else if (this.strangeChargeActive) {
+      const chargePulse = Math.sin(t * 10) * 0.05;
+      targetRightShoulderRotX = 0.95 + chargePulse;
+      targetRightShoulderRotY = -0.28;
+      targetRightShoulderRotZ = 0.3;
+      targetRightElbowRotX = 1.15;
+      targetRightWristRotX = -0.3;
+
+      targetLeftShoulderRotX = 0.95 - chargePulse;
+      targetLeftShoulderRotY = 0.28;
+      targetLeftShoulderRotZ = -0.3;
+      targetLeftElbowRotX = 1.15;
+      targetLeftWristRotX = -0.3;
+
+      targetWaistRotX = -0.12;
+      targetHeadRotX = 0.1;
     }
 
     // Apply upper body rotations
